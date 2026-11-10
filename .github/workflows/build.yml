@@ -1,0 +1,66 @@
+name: Build
+
+# 每次推到 main 都會打包三個系統的版本（在 Actions 頁面的 Artifacts 下載）；
+# 推 v 開頭的標籤（例如 v0.1.0）會另外建立 Release，附上三個下載檔。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: ChisaDesktopPet-windows.zip
+          - os: macos-latest
+            asset: ChisaDesktopPet-macos.zip
+          - os: ubuntu-22.04
+            asset: ChisaDesktopPet-linux.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux 系統套件（讓 Qt 的 xcb 外掛一起被打包）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 libxcb-render-util0 libxcb-image0 libegl1
+
+      - name: 安裝相依套件
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 打包
+        run: python packaging/build.py
+
+      - name: 壓縮（Windows）
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/ChisaDesktopPet.exe -DestinationPath ${{ matrix.asset }}
+
+      - name: 壓縮（macOS）
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/ChisaDesktopPet.app ${{ matrix.asset }}
+
+      - name: 壓縮（Linux）
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.asset }} -C dist ChisaDesktopPet
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+      - name: 發佈到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
