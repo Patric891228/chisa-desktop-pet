@@ -163,7 +163,91 @@ def peek():
     ]
 
 
-MS = {"held": [160] * 4, "fall": [90] * 2, "land": [140, 140, 200, 300, 300, 300],
+# ---------- 側面伸手：用 hold／behind 換掉手臂（角度 90 = 正上方） ----------
+def reach_arm(ang, L=5):
+    def f(g, ctx):
+        ex, ey = v4.arm_to(g, ctx["hip"] + 2, ctx["sy"], ang, L)
+        rect(g, round(ex) - 1, round(ey) - 1, round(ex), round(ey), 4)   # 手
+    return f
+
+
+def side_raw(**kw):
+    g = v3.side(raw=True, **kw)
+    g[31] = [0 if c == v4.SHADOW else c for c in g[31]]                # 不要地上的影子
+    return g
+
+
+def finish_raw(g, fx=None):
+    g = v4.outline_any(g, shadow_y=None)
+    if fx:
+        fx(g)
+    return [[3 if c == 13 else c for c in row] for row in g]
+
+
+# ---------- 爬牆：側面朝右，牆在畫布右邊，雙手扶牆、腳踩牆，手腳交替往上 ----------
+def wall_arms(near_ang, far_ang):
+    """兩隻手往前伸到牆上（畫在頭前面，但位置在下巴下方）。"""
+    def f(g, ctx):
+        for ang, sy in ((far_ang, ctx["sy"] + 1), (near_ang, ctx["sy"])):
+            ex, ey = v4.arm_to(g, ctx["hip"] + 2, sy, ang, 9)
+            rect(g, round(ex) - 1, round(ey) - 1, round(ex), round(ey), 4)
+    return f
+
+
+def climb():
+    F = []
+    for k in range(4):
+        a, b = (12, -8) if k < 2 else (-8, 12)
+        g = side_raw(lean=2, near=3, far=3, near_lift=2 if k < 2 else 0, far_lift=0 if k < 2 else 2,
+                     dy=-1 if k % 2 else 0, hold=wall_arms(a, b))
+        F.append(finish_raw(g))
+    return F
+
+
+def hang():
+    """掛在牆上休息：雙手扶牆，腳一前一後晃，偶爾流汗往下看。"""
+    F = []
+    for k in range(4):
+        g = side_raw(lean=2, near=2 + (k % 2), far=1 - (k % 2), far_lift=1,
+                     hold=wall_arms(5, 5), eyes="closed" if k == 3 else "open")
+        F.append(finish_raw(g, v6.sweat(6, 6) if k >= 2 else None))
+    return F
+
+
+# ---------- 伸懶腰：雙手往上伸、打哈欠 ----------
+def stretch():
+    Fr = v6.front
+    out = [
+        Fr(eyes="open"),
+        Fr(eyes="closed", arms="up", dy=-1),
+        Fr(eyes="closed", arms="up", dy=-1, extra=ms.yawn),
+        Fr(eyes="closed", arms="up", dy=-1, extra=ms.yawn, fx=lambda g: ms.tear(g)),
+        Fr(eyes="closed", arms="up"),
+        Fr(eyes="sleepy"),
+        Fr(eyes="open"),
+    ]
+    return [[[3 if c == 13 else c for c in row] for row in v7.half(f)] for f in out]
+
+
+# ---------- 追游標：往上跳、伸手抓；抓到後側面舉著手走 ----------
+def reach():
+    Fr = v6.front
+    out = [Fr(eyes="open", arms="up", dy=-1), Fr(eyes="open", arms="up", mouth="open", dy=-1)]
+    return [[[3 if c == 13 else c for c in row] for row in v7.half(f)] for f in out]
+
+
+def carry():
+    F = []
+    for kw in (dict(near=2, far=-2, arm_far=3), dict(dy=-1, far_lift=1), dict(near=-2, far=2, arm_far=-3),
+               dict(dy=-1, near_lift=1)):
+        g = v3.side(raw=True, flow=1, mouth="open", hold=wall_arms(8, 8), **kw)
+        F.append(finish_raw(g))
+    return F
+
+
+MS = {"climb": [180] * 4, "hang": [400, 400, 600, 300], "stretch": [300, 400, 500, 500, 400, 400, 300],
+      "reach": [120, 120], "carry": [140] * 4,
+      "held": [160] * 4, "fall": [90] * 2, "land": [140, 140, 200, 300, 300, 300],
       "peek": [150, 120, 100, 100, 700, 250, 200, 400, 450, 450, 450, 450, 180, 900, 500, 150, 180, 160, 300]}
 
 
@@ -182,7 +266,8 @@ if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "girl_v7", "desktop")
     os.makedirs(out, exist_ok=True)
     meta = {}
-    for name, fn in (("held", held), ("fall", fall), ("land", land), ("peek", peek)):
+    for name, fn in (("held", held), ("fall", fall), ("land", land), ("peek", peek),
+                     ("climb", climb), ("hang", hang), ("stretch", stretch), ("reach", reach), ("carry", carry)):
         fr = fn()
         strip = Image.new("RGBA", (32 * len(fr), 32))
         for i, f in enumerate(fr):

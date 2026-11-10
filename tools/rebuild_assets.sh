@@ -15,3 +15,4 @@ for f in sorted(glob.glob("assets/anims_*.json")):
 json.dump(d, open("assets/anims.json", "w"), indent=1)
 print("ok", len(d), "個動作")
 PY
+python3 tools/fix_top.py assets

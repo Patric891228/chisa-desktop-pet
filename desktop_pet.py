@@ -14,11 +14,12 @@ import json, os, random, sys, time
 from datetime import datetime, date
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import (QPixmap, QPainter, QTransform, QColor, QFont, QFontMetrics, QCursor,
+from PySide6.QtGui import (QRegion, QPixmap, QPainter, QTransform, QColor, QFont, QFontMetrics, QCursor,
                            QIcon, QAction, QActionGroup)
 from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon, QLabel, QProgressBar,
                                QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout)
 
+__version__ = "0.1.1"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(HERE, "assets")
@@ -41,6 +42,7 @@ WAKE_GRACE_S = 5 * 60              # 睡覺時段被叫醒，5 分鐘沒互動�
 
 # 每秒精力變化（負的是消耗）
 ENERGY_RATE = {"walk": -0.05, "run": -0.15, "walk_weapon": -0.08, "run_weapon": -0.2, "swing": -0.25,
+               "climb": -0.2, "hang": -0.05, "reach": -0.2, "carry": -0.1, "stretch": 0.05,
                "idle": 0.03, "read": 0.06, "snore": 0.15, "desk_sleep_r": 0.2, "bed_sleep_r": 0.25}
 
 LINES = {
@@ -61,16 +63,91 @@ LINES = {
     "lunch": ["該吃午餐了吧？"],
     "late": ["已經很晚了，你也該睡了。"],
     "neglect": ["……（看了你一眼）", "……你還在嗎？"],
+    "sit": ["已經坐 {m} 分鐘了，起來動一動吧。", "坐太久了。站起來，跟我一起伸懶腰。", "休息一下，眼睛看看遠方。"],
+    "sit_back": ["歡迎回來。", "休息夠了嗎？"],
+    "busy": ["等一下，我在忙。", "現在不行……！"],
+    "climb_top": ["這裡視野不錯。", "……好高。", "（往下看）"],
+    "climb_jump": ["嘿！", "……跳了。"],
+    "climb_down": ["到了。", "下來了。"],
+    "chase_start": ["……那個箭頭。", "別動。", "盯——"],
+    "chase_high": ["太高了……", "……下來一點。"],
+    "chase_miss": ["……沒抓到。", "下次一定。"],
+    "chase_got": ["抓到了！", "哼哼，抓到了。"],
+    "chase_escape": ["……逃掉了。", "啊，跑了。"],
+    "chase_return": ["好，還給你。", "借我玩一下而已。"],
 }
+
+# 禮物：照《鳴潮》千咲的角色資料（喜歡手工、剪裁、計算、巧克力棒，覺得比草莓口味好吃；討厭辣的食物）
+# 名稱、喜好（love/like/normal/dislike）、好感變化、台詞、12x12 像素圖示
+GIFTS = {
+    "choco":    {"name": "巧克力棒", "pref": "love", "gain": 10,
+                 "lines": ["……巧克力棒。你怎麼知道的？", "這個口味最好吃。……謝謝。"]},
+    "paper":    {"name": "剪紙用的色紙", "pref": "like", "gain": 6,
+                 "lines": ["色紙……我來剪一個最漂亮的給你。", "這個顏色，很適合剪花。"]},
+    "sewing":   {"name": "布料和針線", "pref": "like", "gain": 5,
+                 "lines": ["布料的紋路很整齊。……可以做點東西。", "針腳要算好間距才漂亮。"]},
+    "astrite":  {"name": "星聲", "pref": "normal", "gain": 3,
+                 "lines": ["星聲……這是要我拿去抽卡嗎？", "……你自己留著抽吧。"]},
+    "strawberry": {"name": "草莓口味巧克力棒", "pref": "normal", "gain": 2,
+                   "lines": ["草莓口味的……也可以。", "……原味的比較好吃。"]},
+    "spicy":    {"name": "辣味零食", "pref": "dislike", "gain": -2,
+                 "lines": ["……這是在挑戰我嗎？", "辣的不行。拿走。"]},
+}
+PREF_TEXT = {"love": "♥♥♥ 最喜歡", "like": "♥♥ 喜歡", "normal": "♥ 普通", "dislike": "✕ 討厭"}
+GIFT_ICONS = {
+    "choco": ["............", "........KK..", ".......KBBK.", "......KBCBK.", ".....KBCBK..", "....KWWBK...",
+              "...KRWWK....", "..KRRRK.....", ".KRRRK......", ".KRRK.......", "..KK........", "............"],
+    "paper": ["............", ".KKKKKKKK...", ".KRRRRRRK...", ".KRRKKKKKKK.", ".KRRKGGGGGK.", ".KRRKGGGGGK.",
+              ".KKKKKKKKKKK", "...KNNNNNNNK", "...KNNNNNNNK", "...KNNNNNNNK", "...KKKKKKKKK", "............"],
+    "sewing": ["............", "..KKKKKK....", "..KBBBBK..K.", "...KRRK...K.", "...KRRK...K.", "...KRRK..KAK",
+               "...KRRK..KAK", "...KRRK..KAK", "..KBBBBK.KAK", "..KKKKKK..K.", "............", "............"],
+    "astrite": [".....KK.....", "....KGGK....", "...KGWGGK...", "..KGWGGGGK..", ".KGGGGGGGGK.", "KGGGGWGGGGGK",
+                ".KGGGGGGGGK.", "..KGGGGGGK..", "...KGGGGK...", "....KGGK....", ".....KK.....", "............"],
+    "strawberry": ["............", "........KK..", ".......KPPK.", "......KPRPK.", ".....KPRPK..", "....KWWPK...",
+                   "...KRWWK....", "..KRRRK.....", ".KRRRK......", ".KRRK.......", "..KK........", "............"],
+    "spicy": ["............", "..KKKKKKKK..", "..KRRRRRRK..", "..KRRWWRRK..", "..KRWNNWRK..", "..KRWRRWRK..",
+              "..KRWRRWRK..", "..KRRWWRRK..", "..KRRRRRRK..", "..KRRRRRRK..", "..KKKKKKKK..", "............"],
+}
+ICON_COLORS = {"K": (16, 12, 24), "A": (96, 94, 112), "B": (110, 62, 36), "C": (160, 100, 60), "G": (222, 178, 64), "W": (255, 255, 255), "R": (240, 52, 60),
+               "D": (140, 10, 30), "N": (34, 92, 60), "L": (90, 170, 80), "P": (246, 186, 190)}
+
+
+def gift_icon(gid):
+    from PySide6.QtGui import QImage
+    rows = GIFT_ICONS[gid]
+    img = QImage(12, 12, QImage.Format_ARGB32)
+    img.fill(Qt.transparent)
+    for y, row in enumerate(rows):
+        for x, ch in enumerate(row):
+            if ch in ICON_COLORS:
+                img.setPixelColor(x, y, QColor(*ICON_COLORS[ch]))
+    return img
+
+
+def chime_line(h):
+    period = "凌晨" if h < 6 else "早上" if h < 9 else "上午" if h < 12 else "中午" if h == 12 else \
+        "下午" if h < 18 else "晚上"
+    h12 = h if h <= 12 else h - 12
+    t = f"{period} {h12} 點"
+    extra = {7: "……再五分鐘。", 8: "今天也要好好加油。", 12: "吃飯時間到了。", 14: "要不要喝點水？",
+             15: "下午茶時間。", 17: "快下班了吧？", 18: "晚餐吃什麼？", 22: "準備休息吧。"}
+    if h in extra:
+        return f"{t}。{extra[h]}"
+    if 9 <= h <= 11:
+        return f"{t}了。專心的時間。"
+    if 13 <= h <= 16:
+        return f"{t}了。眼睛休息一下。"
+    return f"{t}了。"
 
 STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看書", "snore": "打瞌睡",
                "swing": "練剪刀", "walk_weapon": "扛著剪刀散步", "run_weapon": "扛著剪刀跑步",
                "desk_sleep_r": "趴在桌上午睡", "bed_sleep_r": "睡覺", "headpat": "被摸頭（當機中）",
                "shy_pole": "躲在電線桿後面", "guard": "防備", "shy": "害羞", "gift": "收禮物",
                "sleepy": "睡眼惺忪", "held": "被拎起來", "fall": "往下掉", "land": "落地",
-               "peek": "偷看你的螢幕"}
+               "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰",
+               "reach": "跳起來抓游標", "carry": "抓著你的游標"}
 REACTIONS = ("shy_pole", "guard", "shy")
-FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
+FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "reach"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
 
 def pick(key):
@@ -106,7 +183,9 @@ class Stats:
         self.pats_date = date.today().isoformat()
         self.first_day = date.today().isoformat()
         self.last_seen = time.time()
-        self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper"}
+        self.gift_log = {}           # 每種禮物送過幾次
+        self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
+                         "sit_min": 50, "chime": True, "climb": True, "chase": True}
 
     def load(self):
         try:
@@ -230,7 +309,7 @@ BOW = [".KK...KK.",
        "..K...K.."]
 
 
-def render_bubble(text, style="paper", max_w=150):
+def render_bubble(text, style="paper", max_w=150, icon=None):
     """在 1 倍畫布上畫像素對話框，回傳 QImage（之後整數倍放大，維持像素感）。"""
     import math
     from PySide6.QtGui import QImage
@@ -240,9 +319,12 @@ def render_bubble(text, style="paper", max_w=150):
     full = fm.horizontalAdvance(text)
     if full > max_w:                                # 換行時讓每行差不多長，不留一個字在第二行
         n = math.ceil(full / max_w)
-        max_w = math.ceil(full / n) + fm.horizontalAdvance("。")
+        max_w = math.ceil(full / n) + fm.horizontalAdvance("。。")
     tr = fm.boundingRect(QRect(0, 0, max_w, 400), Qt.TextWordWrap, text)
     tw, th = max(tr.width(), 12), tr.height()
+    iw = icon.width() + 4 if icon is not None else 0
+    th = max(th, icon.height() if icon is not None else 0)
+    tw += iw
     padx, pady = 7, 5
     bw, bh = tw + padx * 2, th + pady * 2 + (2 if deco == "collar" else 0)
     mx, my = 3, 3                                   # 留邊給蝴蝶結等裝飾
@@ -290,48 +372,39 @@ def render_bubble(text, style="paper", max_w=150):
             r(x, y, 1, 1, CYAN); r(x + dx, y, 1, 1, CYAN); r(x, y + dy, 1, 1, CYAN)
         r(bw - 5, -1, 3, 1, CYAN)
 
+    if icon is not None:
+        p.drawImage(mx + padx, my + pady + (th - icon.height()) // 2, icon)
     p.setFont(font)
     p.setPen(ink)
     top = pady + (2 if deco == "collar" else 0)
-    p.drawText(QRect(mx + padx, my + top - (1 if deco != "collar" else 0), tw, th),
+    p.drawText(QRect(mx + padx + iw, my + top - (1 if deco != "collar" else 0), tw - iw, th),
                Qt.TextWordWrap | Qt.AlignHCenter | Qt.AlignVCenter, text)
     p.end()
     return img
 
 
-class Bubble(QWidget):
-    def __init__(self):
-        super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
-                         | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WA_MacAlwaysShowToolWindow)   # macOS：切到別的程式時不要消失
-        self.pix = QPixmap()
-        self.hide_timer = QTimer(self, singleShot=True, timeout=self.hide)
+class Bubble:
+    """對話框：畫在寵物同一個視窗裡（不另開視窗），所以一定跟著她移動。"""
+    def __init__(self, on_change):
+        self.pix = None
+        self.mask = None
+        self.on_change = on_change
+        self.hide_timer = QTimer(singleShot=True, timeout=self.hide)
 
-    def say(self, text, anchor_x, anchor_y, style="paper", zoom=2):
-        img = render_bubble(text, style)
+    def say(self, text, style="paper", zoom=2, icon=None):
+        img = render_bubble(text, style, icon=icon)
         self.pix = QPixmap.fromImage(img.scaled(img.width() * zoom, img.height() * zoom,
                                                 Qt.IgnoreAspectRatio, Qt.FastTransformation))
-        self.resize(self.pix.size())
-        self.place(anchor_x, anchor_y)
-        self.show()
-        self.raise_()
-        self.update()
+        self.mask = self.pix.mask()
         self.hide_timer.start(int(2200 + 120 * len(text)))
+        self.on_change()
 
-    def place(self, anchor_x, anchor_y):
-        scr = QApplication.screenAt(QPoint(anchor_x, anchor_y)) or QApplication.primaryScreen()
-        g = scr.availableGeometry()
-        x = max(g.left(), min(g.right() - self.width(), anchor_x - self.width() // 2))
-        y = max(g.top(), anchor_y - self.height())
-        self.move(x, y)
+    def hide(self):
+        self.pix = self.mask = None
+        self.on_change()
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setCompositionMode(QPainter.CompositionMode_Source)
-        p.fillRect(self.rect(), Qt.transparent)
-        p.drawPixmap(0, 0, self.pix)
+    def isVisible(self):
+        return self.pix is not None
 
 
 MENU_CSS = """
@@ -355,7 +428,7 @@ class StatusPanel(QWidget):
     def __init__(self, pet):
         super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
         self.pet = pet
-        self.setWindowTitle("她的狀態")
+        self.setWindowTitle(f"她的狀態（v{__version__}）")
         self.setStyleSheet("QWidget{background:#181a26;color:#fff0e6;font-size:13px} "
                            "QPushButton{background:#2e2a48;border:1px solid #646092;padding:5px 10px;border-radius:4px}"
                            "QPushButton:hover{background:#464068}")
@@ -366,8 +439,9 @@ class StatusPanel(QWidget):
         grid = QGridLayout()
         self.aff = QProgressBar(maximum=100); self.aff.setStyleSheet(BAR_CSS % "#f0343c")
         self.eng = QProgressBar(maximum=100); self.eng.setStyleSheet(BAR_CSS % "#96cdff")
+        self.likes = QLabel(); self.likes.setWordWrap(True)
         self.gifts = QLabel(); self.neglect = QLabel(); self.pats = QLabel(); self.days = QLabel()
-        rows = [("好感度", self.aff), ("精力", self.eng), ("禮物", self.gifts),
+        rows = [("好感度", self.aff), ("精力", self.eng), ("禮物", self.gifts), ("喜好", self.likes),
                 ("冷落", self.neglect), ("今天摸頭", self.pats), ("相處", self.days)]
         for r, (k, w) in enumerate(rows):
             lab = QLabel(k); lab.setStyleSheet("color:#9a96c0")
@@ -396,6 +470,8 @@ class StatusPanel(QWidget):
         if s.gift_stock < GIFT_MAX:
             g += f"　下一個 {fmt_hours(s.gift_eta() / TIME_SCALE)} 後"
         self.gifts.setText(g)
+        known = [f"{GIFTS[g]['name']} {PREF_TEXT[GIFTS[g]['pref']].split()[0]}" for g in GIFTS if s.gift_log.get(g)]
+        self.likes.setText("、".join(known) + f"（{len(known)}/{len(GIFTS)}）" if known else f"還不知道（0/{len(GIFTS)}），送禮試試看")
         self.neglect.setText(f"再 {fmt_hours(s.neglect_eta() / TIME_SCALE)} 沒理她，好感 -1")
         self.pats.setText(f"{s.pats_today} 次（前 {PAT_DAILY} 次各 +{PAT_GAIN} 好感）")
         d = (date.today() - date.fromisoformat(s.first_day)).days + 1
@@ -415,7 +491,9 @@ class Pet(QWidget):
         self.setMouseTracking(True)
         self.stats = Stats(); self.stats.load()
         self.sprites = Sprites()
-        self.bubble = Bubble()
+        self.bubble = Bubble(lambda: self.redraw() if hasattr(self, "pix") else None)
+        self.sprite_rect = QRect()
+        self.bubble_rect = QRect()
         self.panel = StatusPanel(self)
         self.apply_on_top(self.stats.settings["on_top"], init=True)
 
@@ -439,6 +517,13 @@ class Pet(QWidget):
         self.said_today = set()
         self.last_tick = time.time()
         self.stat_save_t = time.time()
+        self.on_arrive = None                  # 走到目標後要做的事（爬牆、追游標）
+        self.climb_phase, self.climb_top = None, 0.0
+        self.chase_tries, self.caught, self.warp_ok, self.warp_pos = 0, False, None, None
+        now = time.time()                      # 久坐提醒：滑鼠一直在動的時間
+        self.last_cursor, self.last_move, self.sit_start, self.next_sit = QCursor.pos(), now, now, 0.0
+        self.sit_reminded = False
+        self.last_chime = minute_of_day() // 60
 
         if self.stats.settings["schedule"] and self.is_sleep_time():
             self.enter_sleep()
@@ -464,14 +549,9 @@ class Pet(QWidget):
     def half_w(self, name=None):
         return self.meta(name)["w"] * self.scale / 2
 
-    def head_point(self):
-        m = self.meta()
-        return int(self.cx), int(self.bottom - m["h"] * self.scale - 2)
-
-    def say(self, text):
+    def say(self, text, icon=None):
         if text:
-            x, y = self.head_point()
-            self.bubble.say(text, x, y, self.stats.settings.get("bubble", "paper"), max(1, self.scale // 2))
+            self.bubble.say(text, self.stats.settings.get("bubble", "paper"), max(1, self.scale // 2), icon)
 
     def is_sleep_time(self):
         m = minute_of_day()
@@ -507,21 +587,34 @@ class Pet(QWidget):
         flip = self.facing_left
         pix, mask = self.sprites.frame(self.anim_name, self.frame, self.scale, flip)
         self.pix = pix
-        x = int(round(self.cx - pix.width() / 2))
-        y = int(round(self.bottom - pix.height()))
-        if self.geometry() != QRect(x, y, pix.width(), pix.height()):
-            self.setGeometry(x, y, pix.width(), pix.height())
-        self.setMask(mask)
-        self.update()
+        S = QRect(int(round(self.cx - pix.width() / 2)), int(round(self.bottom - pix.height())),
+                  pix.width(), pix.height())
+        U = S
         if self.bubble.isVisible():
-            self.bubble.place(*self.head_point())
+            bp = self.bubble.pix
+            g = self.screen_geo()
+            bx = max(g.left(), min(g.right() + 1 - bp.width(), int(self.cx) - bp.width() // 2))
+            by = max(g.top(), S.top() + self.meta().get("pad_top", 0) * self.scale - bp.height())
+            B = QRect(bx, by, bp.width(), bp.height())
+            U = S.united(B)
+        if self.geometry() != U:
+            self.setGeometry(U)
+        self.sprite_rect = S.translated(-U.topLeft())
+        region = QRegion(mask).translated(self.sprite_rect.topLeft())
+        if self.bubble.isVisible():
+            self.bubble_rect = B.translated(-U.topLeft())
+            region = region.united(QRegion(self.bubble.mask).translated(self.bubble_rect.topLeft()))
+        self.setMask(region)
+        self.update()
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setCompositionMode(QPainter.CompositionMode_Source)
         p.fillRect(self.rect(), Qt.transparent)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        p.drawPixmap(0, 0, self.pix)
+        p.drawPixmap(self.sprite_rect.topLeft(), self.pix)
+        if self.bubble.isVisible():
+            p.drawPixmap(self.bubble_rect.topLeft(), self.bubble.pix)
 
     # ---------- 行為 ----------
     def pick_next(self):
@@ -535,6 +628,11 @@ class Pet(QWidget):
             pool = {"idle": 2, "read": 3, "snore": 3, "desk_sleep_r": 2, "walk": 1}
         elif s.energy < 50:
             pool.pop("run", None); pool.pop("run_weapon", None)
+        st = s.settings
+        if st.get("climb", True) and s.energy >= 40:
+            pool["climb"] = 1
+        if st.get("chase", True) and s.energy >= 30:
+            pool["chase"] = 1
         if self.last_action in pool and len(pool) > 1:
             pool.pop(self.last_action)
         a = random.choices(list(pool), weights=list(pool.values()))[0]
@@ -543,6 +641,12 @@ class Pet(QWidget):
             self.say(pick("tired"))
 
         g = self.screen_geo()
+        if a == "climb":
+            self.start_climb(); return
+        if a == "chase":
+            self.chase_tries = 0
+            self.say(pick("chase_start"))
+            self.start_chase(); return
         if a in ("walk", "run", "walk_weapon", "run_weapon"):
             name = a
             hw = self.half_w(name)
@@ -572,6 +676,7 @@ class Pet(QWidget):
     def react(self, steps):
         """steps：[(動畫, 輪數, 說的話), ...] 依序播。"""
         self.mode = "react"
+        self.on_arrive, self.caught, self.speed = None, False, 0
         self.react_clicks = 0
         self.queue = list(steps)
         self.next_in_queue()
@@ -580,9 +685,14 @@ class Pet(QWidget):
         name, loops, line = self.queue.pop(0)
         self.facing_left = False
         self.play(name, loops)
-        self.say(line)
+        icon = None
+        if name in ("gift", "guard") and getattr(self, "gift_icon_pending", None) is not None and line:
+            icon, self.gift_icon_pending = self.gift_icon_pending, None
+        self.say(line, icon)
 
     def anim_done(self):
+        if self.mode == "climb":
+            self.climb_next(); return
         if self.mode == "react" and self.queue:
             self.next_in_queue(); return
         if self.should_sleep():
@@ -598,9 +708,17 @@ class Pet(QWidget):
         return []
 
     # ---------- 互動 ----------
+    def busy(self):
+        if self.mode in ("climb", "jump", "carry", "fall", "held"):
+            self.say(pick("busy"))
+            return True
+        return False
+
     def do_pat(self):
         s = self.stats
         self.input_happened()
+        if self.busy():
+            return
         if self.mode == "react" and self.anim_name == "headpat":
             self.react_clicks += 1
             if self.react_clicks == 3:
@@ -617,9 +735,11 @@ class Pet(QWidget):
         s.pats_today += 1
         self.react([("headpat", 1, None), (random.choice(REACTIONS), 1, line)])
 
-    def do_gift(self):
+    def do_gift(self, gid=None):
         s = self.stats
         self.input_happened()
+        if self.busy():
+            return
         pre = self.wake_prefix()
         if s.gift_stock == 0:
             msg = pick("no_gift").format(h=fmt_hours(s.gift_eta() / TIME_SCALE))
@@ -628,9 +748,16 @@ class Pet(QWidget):
             else:
                 self.say(msg)
             return
+        gid = gid or random.choice(list(GIFTS))
+        gift = GIFTS[gid]
         s.gift_stock -= 1
-        s.add_affection(GIFT_GAIN)
-        self.react(pre + [("gift", 2, pick("gift"))])
+        s.add_affection(gift["gain"])
+        s.gift_log[gid] = s.gift_log.get(gid, 0) + 1
+        line = random.choice(gift["lines"])
+        steps = {"love": [("gift", 2, line), ("shy", 1, None)], "like": [("gift", 2, line)],
+                 "normal": [("gift", 1, line)], "dislike": [("guard", 1, line)]}[gift["pref"]]
+        self.gift_icon_pending = gift_icon(gid)
+        self.react(pre + steps)
         self.stats.save()
 
     def show_panel(self):
@@ -638,6 +765,9 @@ class Pet(QWidget):
 
     # ---------- 滑鼠 ----------
     def mousePressEvent(self, e):
+        if not self.sprite_rect.contains(e.position().toPoint()):   # 點到對話框：關掉它
+            self.bubble.hide()
+            return
         if e.button() == Qt.LeftButton:            # 先記下來：放開時沒移動就開選單，有移動就是拎起來
             self.press_pos = e.globalPosition().toPoint()
             self.drag_off = QPoint(int(self.cx), int(self.bottom)) - self.press_pos
@@ -652,6 +782,7 @@ class Pet(QWidget):
             self.input_happened()
             was_sleep = self.mode == "sleep"
             self.mode = "held"
+            self.on_arrive, self.caught = None, False
             self.queue.clear()
             self.facing_left = False
             self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "held", 0, 0.0, 0, 0
@@ -693,6 +824,8 @@ class Pet(QWidget):
 
         g = self.screen_geo()
         floor = g.bottom() + 1
+        self.check_sitting(now)
+        self.check_chime()
 
         if self.mode == "held":
             self.advance_frame(dt)
@@ -707,6 +840,12 @@ class Pet(QWidget):
                 self.advance_frame(dt)
                 self.redraw()
             return
+        if self.mode == "climb":
+            self.tick_climb(dt, g, floor)
+            return
+        if self.mode == "jump":
+            self.tick_jump(dt, floor)
+            return
         if abs(self.bottom - floor) > 0.5:     # 工作列或螢幕大小變了
             self.bottom = floor
             self.redraw()
@@ -714,10 +853,15 @@ class Pet(QWidget):
         # 走路
         if self.speed > 0:
             step = self.speed * dt
+            if self.mode == "carry":
+                self.carry_cursor()
+                if self.mode != "carry":
+                    return
             if abs(self.target - self.cx) <= step:
                 self.cx = self.target
                 self.speed = 0
-                self.anim_done()
+                cb, self.on_arrive = self.on_arrive, None
+                (cb or self.anim_done)()
                 return
             self.cx += step if self.target > self.cx else -step
             self.redraw()
@@ -772,11 +916,194 @@ class Pet(QWidget):
         self.cx = max(g.left() + hw, min(g.right() + 1 - hw, tx))
         QTimer.singleShot(int(sum(self.meta("peek")["ms"][self.frame:14])), lambda: (
             self.anim_name == "peek" and self.say(pick("peek"))))
+    # ---------- 爬螢幕邊緣 ----------
+    def start_climb(self):
+        """走到比較近的螢幕邊緣，再開始往上爬。"""
+        g = self.screen_geo()
+        hw = self.half_w("climb")
+        left = self.cx - g.left() < g.right() - self.cx
+        self.climb_left = left
+        tx = g.left() + hw if left else g.right() + 1 - hw
+        if abs(tx - self.cx) < 4:
+            self.begin_climb(); return
+        self.on_arrive = self.begin_climb
+        self.play("walk", 0, 7 * self.scale, target=tx)
+
+    def begin_climb(self):
+        g = self.screen_geo()
+        self.mode, self.climb_phase = "climb", "up"
+        self.facing_left = self.climb_left          # 圖是朝右（牆在右邊），左邊的牆就翻轉
+        self.climb_top = g.bottom() + 1 - random.uniform(0.3, 0.7) * g.height()
+        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "climb", 0, 0.0, 0, 0
+        self.redraw()
+
+    def tick_climb(self, dt, g, floor):
+        v = 6 * self.scale * dt
+        if self.climb_phase == "up":
+            self.bottom = max(self.climb_top, self.bottom - v)
+            if self.bottom <= self.climb_top:
+                self.climb_phase = "hang"
+                self.anim_name, self.frame, self.frame_t, self.loops_left = "hang", 0, 0.0, random.randint(3, 6)
+                self.say(pick("climb_top"))
+        elif self.climb_phase == "down":
+            self.bottom = min(floor, self.bottom + v * 1.5)
+            if self.bottom >= floor:
+                self.bottom = floor
+                self.mode = "normal"
+                self.say(pick("climb_down"))
+                self.pick_next()
+                return
+        self.advance_frame(dt)
+        self.redraw()
+
+    def climb_next(self):
+        """掛完了：一半機率直接放手跳下去，一半慢慢爬下來。"""
+        if random.random() < 0.5:
+            self.mode, self.vy = "fall", 0.0
+            self.facing_left = False
+            self.anim_name, self.frame, self.frame_t = "fall", 0, 0.0
+            self.say(pick("climb_jump"))
+        else:
+            self.climb_phase = "down"
+            self.anim_name, self.frame, self.frame_t, self.loops_left = "climb", 0, 0.0, 0
+        self.redraw()
+
+    # ---------- 追游標 ----------
+    def start_chase(self):
+        c = QCursor.pos()
+        g = self.screen_geo()
+        if not g.contains(c):
+            self.pick_next(); return
+        hw = self.half_w("run")
+        tx = max(g.left() + hw, min(g.right() + 1 - hw, c.x()))
+        self.chase_tries += 1
+        if abs(tx - self.cx) < 6 * self.scale:
+            self.chase_jump(); return
+        self.on_arrive = self.chase_jump
+        self.play("run", 0, 30 * self.scale, target=tx)
+
+    def chase_jump(self):
+        c = QCursor.pos()
+        floor = self.screen_geo().bottom() + 1
+        if abs(c.x() - self.cx) > 14 * self.scale and self.chase_tries < 3:   # 游標跑了，再追
+            self.start_chase(); return
+        reach = 29 * self.scale                           # 雙手舉高時，手離地多高
+        need = (floor - c.y()) - reach
+        if need > 26 * self.scale:                        # 跳不到
+            self.mode = "normal"
+            self.play("idle", 2)
+            self.say(pick("chase_high")); return
+        self.mode = "jump"
+        self.facing_left = False
+        self.vy = -(2 * 2600 * max(need + 3 * self.scale, 6 * self.scale)) ** 0.5
+        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "reach", 0, 0.0, 0, 0
+        self.caught = False
+        self.redraw()
+
+    def tick_jump(self, dt, floor):
+        self.vy += 2600 * dt
+        self.bottom = min(floor, self.bottom + self.vy * dt)
+        c = QCursor.pos()
+        hand_y = self.bottom - 29 * self.scale
+        if not self.caught and abs(c.x() - self.cx) < 12 * self.scale and abs(c.y() - hand_y) < 9 * self.scale:
+            self.caught = True
+            self.say(pick("chase_got"))
+        if self.bottom >= floor:
+            self.bottom = floor
+            if self.caught:
+                self.start_carry()
+            else:
+                self.mode = "react"
+                self.queue = []
+                self.play("idle", 2)
+                self.say(pick("chase_miss"))
+            return
+        self.advance_frame(dt)
+        self.redraw()
+
+    def start_carry(self):
+        g = self.screen_geo()
+        hw = self.half_w("carry")
+        tx = self.cx + random.choice((-1, 1)) * random.uniform(150, 350)
+        if not g.left() + hw <= tx <= g.right() + 1 - hw:
+            tx = self.cx - (tx - self.cx)
+        tx = max(g.left() + hw, min(g.right() + 1 - hw, tx))
+        self.mode = "carry"
+        self.warp_pos = None
+        self.on_arrive = self.end_carry
+        self.play("carry", 0, 6 * self.scale, target=tx)
+
+    def hand_pos(self):
+        sc = self.scale
+        x = self.cx + (-9 if self.facing_left else 9) * sc
+        return QPoint(int(x), int(self.bottom - 12 * sc))
+
+    def carry_cursor(self):
+        """抓著游標走：每一格把游標移到她手上；使用者用力移開就算逃掉。"""
+        cur = QCursor.pos()
+        if self.warp_pos is not None and self.warp_ok:
+            if (cur - self.warp_pos).manhattanLength() > 30:
+                self.mode = "react"; self.queue = []; self.speed = 0; self.on_arrive = None
+                self.play("guard", 1)
+                self.say(pick("chase_escape"))
+                return
+        if self.warp_ok is False:
+            return
+        hp = self.hand_pos()
+        QCursor.setPos(hp)
+        if self.warp_ok is None:                      # 第一次：確認系統允許程式移動游標（Wayland 不行）
+            self.warp_ok = (QCursor.pos() - hp).manhattanLength() <= 3
+        self.warp_pos = hp
+
+    def end_carry(self):
+        self.mode = "react"
+        self.queue = []
+        self.play("idle", 2)
+        self.say(pick("chase_return"))
+
+    # ---------- 久坐提醒、整點報時 ----------
+    def check_sitting(self, now):
+        cur = QCursor.pos()
+        if cur != self.last_cursor:
+            self.last_cursor = cur
+            if now - self.last_move > 5 * 60 / TIME_SCALE:     # 離開超過 5 分鐘：算有休息
+                self.sit_start = now
+                if self.sit_reminded and self.mode == "normal":
+                    self.say(pick("sit_back"))
+                self.sit_reminded = False
+            self.last_move = now
+        limit = int(self.stats.settings.get("sit_min", 50))
+        if limit <= 0 or now < self.next_sit or now - self.last_move > 60:
+            return
+        if now - self.sit_start >= limit * 60 / TIME_SCALE and self.mode == "normal":
+            self.next_sit = now + 10 * 60 / TIME_SCALE                # 沒休息的話，10 分鐘後再提醒
+            self.sit_reminded = True
+            mins = int((now - self.sit_start) * TIME_SCALE // 60)
+            self.react([("stretch", 2, pick("sit").format(m=mins))])
+
+    def check_chime(self):
+        h = minute_of_day() // 60
+        if minute_of_day() % 60 != 0 or h == self.last_chime:
+            return
+        self.last_chime = h
+        if not self.stats.settings.get("chime", True) or self.mode == "sleep":
+            return
+        self.say(chime_line(h))
+
     # ---------- 選單、托盤 ----------
     def build_menu(self, menu):
         sleeping = self.mode == "sleep"
         menu.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
-        menu.addAction(f"送禮（剩 {self.stats.gift_stock} 個）", self.do_gift)
+        gm = menu.addMenu(f"送禮（剩 {self.stats.gift_stock} 個）")
+        if self.stats.gift_stock == 0:
+            info = gm.addAction(f"禮物送完了，{fmt_hours(self.stats.gift_eta() / TIME_SCALE)} 後補一個")
+            info.setEnabled(False)
+        for gid, gift in GIFTS.items():
+            known = self.stats.gift_log.get(gid, 0) > 0
+            label = f"{gift['name']}　{PREF_TEXT[gift['pref']] if known else '？'}"
+            a = gm.addAction(QIcon(QPixmap.fromImage(gift_icon(gid).scaled(24, 24))), label)
+            a.triggered.connect(lambda _=False, gid=gid: self.do_gift(gid))
+            a.setEnabled(self.stats.gift_stock > 0)
         menu.addAction("看她的狀態", self.show_panel)
         menu.addSeparator()
         st = menu.addMenu("設定")
@@ -793,9 +1120,19 @@ class Pet(QWidget):
             a.triggered.connect(lambda _=False, key=key: (self.stats.settings.__setitem__("bubble", key),
                                                           self.say(pick("chat"))))
             bgrp.addAction(a); bub.addAction(a)
+        sit = st.addMenu("久坐提醒")
+        sgrp = QActionGroup(sit)
+        for m in (0, 30, 45, 50, 60, 90):
+            a = QAction("關閉" if m == 0 else f"連續用電腦 {m} 分鐘", sit, checkable=True,
+                        checked=int(self.stats.settings.get("sit_min", 50)) == m)
+            a.triggered.connect(lambda _=False, m=m: self.stats.settings.__setitem__("sit_min", m))
+            sgrp.addAction(a); sit.addAction(a)
         for label, key, fn in (("永遠在最上層", "on_top", self.apply_on_top),
                                ("照時間作息（午睡、晚上睡覺）", "schedule", self.set_schedule),
-                               ("偶爾自言自語", "chat", None)):
+                               ("偶爾自言自語", "chat", None),
+                               ("整點報時", "chime", None),
+                               ("會爬螢幕邊緣", "climb", None),
+                               ("會追滑鼠游標", "chase", None)):
             a = QAction(label, st, checkable=True, checked=bool(self.stats.settings.get(key, True)))
             a.triggered.connect(lambda on, key=key, fn=fn: (self.stats.settings.__setitem__(key, on), fn and fn(on)))
             st.addAction(a)
