@@ -65,49 +65,52 @@ v3.speed_lines = speed_lines
 
 
 # ---------- 剪刀大刃 ----------
-def weapon(g, x0, y0, ang, L=22):
-    """以手 (x0, y0) 為原點，沿 ang 方向畫。t：沿刀方向，w：垂直方向（+ 為刃背那側）。"""
-    c, s = math.cos(math.radians(ang)), -math.sin(math.radians(ang))
-    nx, ny = -s, c
+def weapon(g, x0, y0, ang, L=22, open_=0):
+    """以手 (x0, y0) 為原點，沿 ang 方向畫。t：沿刀方向，w：垂直方向（+ 為刃背那側）。
+    兩片刃：紅刃在 w<0 那側、黑刃在 w>0 那側；open_ 是兩片刃張開的角度（0 = 合起來）。"""
+    def axis(a):
+        c, s = math.cos(math.radians(a)), -math.sin(math.radians(a))
+        return c, s, -s, c
 
-    def P(t, w, col):
+    def P(ax, t, w, col):
+        c, s, nx, ny = ax
         px(g, x0 + c * t + nx * w, y0 + s * t + ny * w, col)
 
-    def T(a, b, w, col):
+    def T(ax, a, b, w, col):
         t = a
         while t <= b:
-            P(t, w, col)
+            P(ax, t, w, col)
             t += 0.5
 
-    # 紅色握環（剪刀把手）：手後方一個空心環
+    A = axis(ang)
+    R = axis(ang + open_ / 2)   # 紅刃
+    B = axis(ang - open_ / 2)   # 黑刃
+    # 握環（手後方）：紅、黑各一個
     for i in range(36):
         a = 2 * math.pi * i / 36
-        P(-4 + 2.6 * math.cos(a), 0.6 + 1.7 * math.sin(a), 9)
-    # 握柄
-    T(-1.5, 0.5, 0, 11)
-    # 刀身：紅色主體、黑色內刃、金色細線
-    T(2, L - 3, -1, 9)
-    T(2, L - 1, 0, 9)
-    T(2, L - 6, 1, 11)
-    T(4, 14, -2, 9)
-    T(3, 15, 0, 11)   # 中線改黑色
-    T(L - 1, L, 0, 9)
-    # 黑色尖刺（剪刀另一片的叉）
-    for t, w in ((3, 2), (4, 2.5), (5, 3), (6, 3.5), (7, 4), (6, 2), (7, 2.5), (8, 3), (9, 3.5)):
-        P(t, w, 11)
+        P(R, -4 + 2.4 * math.cos(a), -1.2 + 1.5 * math.sin(a), 9)
+        P(B, -4 + 2.4 * math.cos(a), 1.2 + 1.5 * math.sin(a), 11)
+    T(A, -1.5, 0.5, 0, 11)                     # 握柄
+    # 黑刃（先畫，紅刃疊在上面）
+    T(B, 2, L - 4, 1, 11); T(B, 2, L - 6, 2, 11); T(B, 4, L - 10, 3, 11)
+    T(B, L - 3, L - 3, 1, 11)
+    T(B, 3, L - 6, 1, 8)                       # 黑刃的灰色刃口
+    # 紅刃
+    T(R, 2, L - 1, 0, 9); T(R, 2, L - 3, -1, 9); T(R, 4, L - 8, -2, 9)
+    T(R, 3, L - 5, 0, 10)                      # 紅刃的深紅刃口
     # 金色轉軸
     for dt in (-1, 0, 1):
         for dw in (-1, 0, 1):
             if abs(dt) + abs(dw) < 2:
-                P(1.5 + dt, dw, GOLD)
-    P(1.5, 0, 10)
+                P(A, 1.5 + dt, dw, GOLD)
+    P(A, 1.5, 0, 10)
 
 
 # ---------- 合成：角色＋武器放到大畫布 ----------
 CW, CH, OX, OY = 56, 32, 12, 0  # 生活空間高 64px：畫布 112x64
 
 
-def with_weapon(arm_ang, blade_ang, behind=False, fx=None, arm_len=4, **side_kw):
+def with_weapon(arm_ang, blade_ang, behind=False, fx=None, arm_len=4, open_=0, **side_kw):
     hand = {}
 
     def hold(g, ctx):
@@ -119,13 +122,13 @@ def with_weapon(arm_ang, blade_ang, behind=False, fx=None, arm_len=4, **side_kw)
     hx, hy = hand["xy"]
     hx, hy = hx + OX, hy + OY
     if behind:
-        weapon(g, hx, hy, blade_ang)
+        weapon(g, hx, hy, blade_ang, open_=open_)
     for y in range(32):
         for x in range(32):
             if ch[y][x]:
                 g[y + OY][x + OX] = ch[y][x]
     if not behind:
-        weapon(g, hx, hy, blade_ang)
+        weapon(g, hx, hy, blade_ang, open_=open_)
     px(g, hx, hy, 4)  # 手握在柄上
     g = outline_any(g, shadow_y=OY + 31)
     if fx:
@@ -157,6 +160,17 @@ def arc(a0, a1, r, c=6, cx=OX + 16, cy=OY + 21):
 side = v3.side
 
 
+def snip(k):
+    """剪下去的瞬間：刀尖前面冒出白色的「喀」線。k=1 時線變短變淡。"""
+    def f(g):
+        x0, y0 = OX + 16 + 24, OY + 20
+        rays = ((1, 0, 3), (1, -1, 2), (1, 1, 2), (0, -1, 2), (0, 1, 2))
+        for dx, dy, n in rays:
+            for i in range(n - k):
+                px(g, x0 + dx * (2 + k + i), y0 + dy * (2 + k + i), 6 if k == 0 else 13)
+    return f
+
+
 # ---------- idle：全身伸展（腳不動） ----------
 def stretch(g, dx):
     """64 格座標：腰以上整個往上拉 2px 並往 dx 方向傾，腳與影子不動。"""
@@ -180,11 +194,19 @@ def scenes():
     old = v3.scenes()
     S["walk"], S["run"], S["snore"] = old["walk"], old["run"], old["snore"]
     st = dict(near=2, far=-2)
+    st_free = {}
+    # 練剪刀：往前剪（剪刀平舉在前面，張開、喀擦合起來，一邊往前踏）
     S["swing"] = [
-        with_weapon(-30, 12, **st),
-        with_weapon(130, 150, dy=-1, arm_far=3, **st),
-        with_weapon(20, -5, lean=1, mouth="open", arm_far=-3, fx=arc(100, -5, 23), **st),
-        with_weapon(-50, -15, dy=1, lean=1, arm_far=-3, fx=arc(15, -20, 23, c=13), **st),
+        with_weapon(-10, 4, **st),
+        with_weapon(-6, 1, open_=20, **st),
+        with_weapon(-4, -2, open_=40, dy=-1, **st),
+        with_weapon(-12, 0, open_=0, lean=1, mouth="open", near=3, far=-3, fx=snip(0), **st_free),
+        with_weapon(-12, 0, open_=0, lean=1, near=3, far=-3, fx=snip(1), **st_free),
+        with_weapon(-8, 1, open_=20, lean=1, near=3, far=-3, **st_free),
+        with_weapon(-4, -2, open_=40, dy=-1, **st),
+        with_weapon(-12, 0, open_=0, lean=1, mouth="open", near=3, far=-3, fx=snip(0), **st_free),
+        with_weapon(-12, 0, open_=0, lean=1, near=3, far=-3, fx=snip(1), **st_free),
+        with_weapon(-10, 4, **st),
     ]
 
     def lines(k):
@@ -209,6 +231,9 @@ def scenes():
     return S
 
 
+FRAME_MS = {"swing": [220, 120, 160, 90, 260, 120, 160, 90, 260, 220],
+            "guard": [300, 380, 380, 450, 500],
+            "shy_pole": [350, 120, 120, 220, 280, 280, 280, 280, 280, 280, 150, 150, 450]}   # 個別格的毫秒數（沒列的用 DUR）
 DUR = {"idle": 300, "walk": 160, "run": 110, "snore": 300,
        "swing": 140, "run_weapon": 110, "walk_weapon": 230}
 

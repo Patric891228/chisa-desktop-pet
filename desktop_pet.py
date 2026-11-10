@@ -73,8 +73,8 @@ LINES = {
     "chase_high": ["太高了……", "……下來一點。"],
     "chase_miss": ["……沒抓到。", "下次一定。"],
     "chase_got": ["抓到了！", "哼哼，抓到了。"],
-    "chase_escape": ["……逃掉了。", "啊，跑了。"],
-    "chase_return": ["好，還給你。", "借我玩一下而已。"],
+    "chase_escape": ["哇——被甩掉了！", "……甩得太用力了。"],
+    "chase_return": ["玩夠了，放手。", "好，還給你。"],
 }
 
 # 禮物：照《鳴潮》千咲的角色資料（喜歡手工、剪裁、計算、巧克力棒，覺得比草莓口味好吃；討厭辣的食物）
@@ -145,7 +145,7 @@ STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看
                "shy_pole": "躲在電線桿後面", "guard": "防備", "shy": "害羞", "gift": "收禮物",
                "sleepy": "睡眼惺忪", "held": "被拎起來", "fall": "往下掉", "land": "落地",
                "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰",
-               "reach": "跳起來抓游標", "carry": "抓著你的游標"}
+               "reach": "跳起來抓游標", "carry": "吊在你的游標上"}
 REACTIONS = ("shy_pole", "guard", "shy")
 FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "reach"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
@@ -519,7 +519,8 @@ class Pet(QWidget):
         self.stat_save_t = time.time()
         self.on_arrive = None                  # 走到目標後要做的事（爬牆、追游標）
         self.climb_phase, self.climb_top = None, 0.0
-        self.chase_tries, self.caught, self.warp_ok, self.warp_pos = 0, False, None, None
+        self.chase_tries, self.caught = 0, False
+        self.carry_t, self.carry_until, self.cur_last, self.cur_speed = 0.0, 0.0, None, 0.0
         now = time.time()                      # 久坐提醒：滑鼠一直在動的時間
         self.last_cursor, self.last_move, self.sit_start, self.next_sit = QCursor.pos(), now, now, 0.0
         self.sit_reminded = False
@@ -846,6 +847,9 @@ class Pet(QWidget):
         if self.mode == "jump":
             self.tick_jump(dt, floor)
             return
+        if self.mode == "carry":
+            self.tick_carry(dt, floor)
+            return
         if abs(self.bottom - floor) > 0.5:     # 工作列或螢幕大小變了
             self.bottom = floor
             self.redraw()
@@ -853,10 +857,6 @@ class Pet(QWidget):
         # 走路
         if self.speed > 0:
             step = self.speed * dt
-            if self.mode == "carry":
-                self.carry_cursor()
-                if self.mode != "carry":
-                    return
             if abs(self.target - self.cx) <= step:
                 self.cx = self.target
                 self.speed = 0
@@ -987,7 +987,7 @@ class Pet(QWidget):
         floor = self.screen_geo().bottom() + 1
         if abs(c.x() - self.cx) > 14 * self.scale and self.chase_tries < 3:   # 游標跑了，再追
             self.start_chase(); return
-        reach = 29 * self.scale                           # 雙手舉高時，手離地多高
+        reach = 22 * self.scale                           # 雙手張開往上撲時，抓得到的高度（離腳底）
         need = (floor - c.y()) - reach
         if need > 26 * self.scale:                        # 跳不到
             self.mode = "normal"
@@ -1004,62 +1004,71 @@ class Pet(QWidget):
         self.vy += 2600 * dt
         self.bottom = min(floor, self.bottom + self.vy * dt)
         c = QCursor.pos()
-        hand_y = self.bottom - 29 * self.scale
-        if not self.caught and abs(c.x() - self.cx) < 12 * self.scale and abs(c.y() - hand_y) < 9 * self.scale:
+        sc = self.scale
+        if (not self.caught and abs(c.x() - self.cx) < 15 * sc
+                and self.bottom - 30 * sc <= c.y() <= self.bottom - 14 * sc):
             self.caught = True
             self.say(pick("chase_got"))
+            self.start_carry()
+            return
         if self.bottom >= floor:
             self.bottom = floor
-            if self.caught:
-                self.start_carry()
-            else:
-                self.mode = "react"
-                self.queue = []
-                self.play("idle", 2)
-                self.say(pick("chase_miss"))
+            self.mode = "react"
+            self.queue = []
+            self.play("idle", 2)
+            self.say(pick("chase_miss"))
             return
         self.advance_frame(dt)
         self.redraw()
 
+    # ---------- 抓到游標：吊在游標上，游標帶著她走 ----------
     def start_carry(self):
-        g = self.screen_geo()
-        hw = self.half_w("carry")
-        tx = self.cx + random.choice((-1, 1)) * random.uniform(150, 350)
-        if not g.left() + hw <= tx <= g.right() + 1 - hw:
-            tx = self.cx - (tx - self.cx)
-        tx = max(g.left() + hw, min(g.right() + 1 - hw, tx))
+        c = QCursor.pos()
         self.mode = "carry"
-        self.warp_pos = None
-        self.on_arrive = self.end_carry
-        self.play("carry", 0, 6 * self.scale, target=tx)
+        self.facing_left = c.x() < self.cx
+        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "carry", 0, 0.0, 0, 0
+        self.on_arrive = None
+        self.carry_t, self.carry_until = 0.0, random.uniform(4, 9)
+        self.cur_last, self.cur_speed = c, 0.0
+        self.follow_cursor(c)
+        self.redraw()
 
-    def hand_pos(self):
-        sc = self.scale
-        x = self.cx + (-9 if self.facing_left else 9) * sc
-        return QPoint(int(x), int(self.bottom - 12 * sc))
+    def follow_cursor(self, c):
+        """把她放到「手剛好抓著游標尖端」的位置。"""
+        m, sc = self.meta("carry"), self.scale
+        hx, hy = m.get("hand", (28, 17))
+        dx = (hx + 0.5 - m["w"] / 2) * sc
+        self.cx = c.x() + (dx if self.facing_left else -dx)
+        top = c.y() - (hy + m.get("pad_top", 0) + 0.5) * sc
+        self.bottom = top + m["h"] * sc
 
-    def carry_cursor(self):
-        """抓著游標走：每一格把游標移到她手上；使用者用力移開就算逃掉。"""
-        cur = QCursor.pos()
-        if self.warp_pos is not None and self.warp_ok:
-            if (cur - self.warp_pos).manhattanLength() > 30:
-                self.mode = "react"; self.queue = []; self.speed = 0; self.on_arrive = None
-                self.play("guard", 1)
-                self.say(pick("chase_escape"))
-                return
-        if self.warp_ok is False:
-            return
-        hp = self.hand_pos()
-        QCursor.setPos(hp)
-        if self.warp_ok is None:                      # 第一次：確認系統允許程式移動游標（Wayland 不行）
-            self.warp_ok = (QCursor.pos() - hp).manhattanLength() <= 3
-        self.warp_pos = hp
+    def tick_carry(self, dt, floor):
+        c = QCursor.pos()
+        d = ((c.x() - self.cur_last.x()) ** 2 + (c.y() - self.cur_last.y()) ** 2) ** 0.5
+        self.cur_last = c
+        self.cur_speed = self.cur_speed * 0.6 + (d / max(dt, 1e-3)) * 0.4
+        self.carry_t += dt
+        self.follow_cursor(c)
+        if self.bottom >= floor:                          # 游標帶她碰到地面：自己放手站好
+            self.bottom = floor
+            self.mode = "react"; self.queue = []
+            self.facing_left = False
+            self.play("idle", 2)
+            self.say(pick("chase_return"))
+            self.redraw(); return
+        if self.cur_speed > 2500 * self.scale / 4:          # 甩太用力：被甩掉
+            self.let_go(pick("chase_escape")); return
+        if self.carry_t >= self.carry_until:              # 玩夠了，自己放手
+            self.let_go(pick("chase_return")); return
+        self.advance_frame(dt)
+        self.redraw()
 
-    def end_carry(self):
-        self.mode = "react"
-        self.queue = []
-        self.play("idle", 2)
-        self.say(pick("chase_return"))
+    def let_go(self, line):
+        self.mode, self.vy = "fall", 0.0
+        self.facing_left = False
+        self.anim_name, self.frame, self.frame_t = "fall", 0, 0.0
+        self.say(line)
+        self.redraw()
 
     # ---------- 久坐提醒、整點報時 ----------
     def check_sitting(self, now):

@@ -13,5 +13,5 @@ for n, fr in S.items():
     for i, f in enumerate(fr):
         strip.alpha_composite(v4.to_img(f), (i * w, 0))
     strip.save(os.path.join(OUT, n + ".png"))
-    meta[n] = {"w": w, "h": h, "frames": len(fr), "ms": [v4.DUR.get(n, ms.MS)] * len(fr)}
+    meta[n] = {"w": w, "h": h, "frames": len(fr), "ms": list(getattr(v4, "FRAME_MS", {}).get(n) or [v4.DUR.get(n, ms.MS)] * len(fr))}
 json.dump(meta, open(os.path.join(OUT, "anims_girl.json"), "w"), indent=1)

@@ -214,39 +214,72 @@ def hang():
     return F
 
 
-# ---------- 伸懶腰：雙手往上伸、打哈欠 ----------
+# ---------- 雙手往兩旁張開（不往上伸，手才不會變長） ----------
+def spread_arms(lift=0, dy=0):
+    """從肩膀往兩旁伸直，lift = 手比肩膀高幾格（斜斜往上）。"""
+    def f(g):
+        for sx, hx in ((9, 1), (22, 30)):
+            sy, hy = 21 + dy, 21 + dy - lift
+            n = abs(hx - sx)
+            for i in range(n + 1):
+                x = sx + (hx - sx) * i / n
+                y = sy + (hy - sy) * i / n
+                rect(g, round(x), round(y) - 1, round(x), round(y) + 1, 11)
+                px(g, round(x), round(y) - 1, 8)                  # 袖子上緣亮邊
+            rect(g, hx - (1 if hx < 16 else 0), hy - 1, hx + (0 if hx < 16 else 1), hy, 4)   # 手掌
+    return f
+
+
+# ---------- 伸懶腰：雙手往兩旁張開、打哈欠 ----------
 def stretch():
     Fr = v6.front
     out = [
         Fr(eyes="open"),
-        Fr(eyes="closed", arms="up", dy=-1),
-        Fr(eyes="closed", arms="up", dy=-1, extra=ms.yawn),
-        Fr(eyes="closed", arms="up", dy=-1, extra=ms.yawn, fx=lambda g: ms.tear(g)),
-        Fr(eyes="closed", arms="up"),
+        Fr(eyes="closed", arms="behind", dy=-1, extra=spread_arms(0, -1)),
+        Fr(eyes="closed", arms="behind", dy=-1, extra=lambda g: (spread_arms(2, -1)(g), ms.yawn(g))),
+        Fr(eyes="closed", arms="behind", dy=-1, extra=lambda g: (spread_arms(2, -1)(g), ms.yawn(g)),
+           fx=lambda g: ms.tear(g)),
+        Fr(eyes="closed", arms="behind", extra=spread_arms(0)),
         Fr(eyes="sleepy"),
         Fr(eyes="open"),
     ]
     return [[[3 if c == 13 else c for c in row] for row in v7.half(f)] for f in out]
 
 
-# ---------- 追游標：往上跳、伸手抓；抓到後側面舉著手走 ----------
+# ---------- 追游標：跳起來，雙手往兩旁斜上張開去撲 ----------
 def reach():
     Fr = v6.front
-    out = [Fr(eyes="open", arms="up", dy=-1), Fr(eyes="open", arms="up", mouth="open", dy=-1)]
+    out = [Fr(eyes="open", arms="behind", dy=-1, extra=spread_arms(4, -1)),
+           Fr(eyes="open", arms="behind", mouth="open", dy=-1, extra=spread_arms(5, -1))]
     return [[[3 if c == 13 else c for c in row] for row in v7.half(f)] for f in out]
+
+
+# ---------- 抓到游標：雙手抓著游標，整個人吊在游標上被拖著走 ----------
+CARRY_HAND = {}
+
+
+def grab_arms(ang, L=11):
+    def f(g, ctx):
+        for a, sy in ((ang + 6, ctx["sy"] + 1), (ang, ctx["sy"])):
+            ex, ey = v4.arm_to(g, ctx["hip"] + 2, sy, a, L)
+            rect(g, round(ex) - 1, round(ey) - 1, round(ex), round(ey), 4)
+        CARRY_HAND["xy"] = (round(ex), round(ey) - 1)
+    return f
 
 
 def carry():
     F = []
-    for kw in (dict(near=2, far=-2, arm_far=3), dict(dy=-1, far_lift=1), dict(near=-2, far=2, arm_far=-3),
-               dict(dy=-1, near_lift=1)):
-        g = v3.side(raw=True, flow=1, mouth="open", hold=wall_arms(8, 8), **kw)
-        F.append(finish_raw(g))
+    for k, kw in enumerate((dict(near=2, far=-1, far_lift=1, flow=1, mouth="open"),
+                            dict(near=1, far=0, near_lift=1, flow=2),
+                            dict(near=-1, far=2, near_lift=1, flow=1, mouth="open"),
+                            dict(near=0, far=1, far_lift=1, flow=2, eyes="closed"))):
+        g = side_raw(hold=grab_arms(14), **kw)
+        F.append(finish_raw(g, v6.sweat(5, 8) if k == 3 else None))
     return F
 
 
 MS = {"climb": [180] * 4, "hang": [400, 400, 600, 300], "stretch": [300, 400, 500, 500, 400, 400, 300],
-      "reach": [120, 120], "carry": [140] * 4,
+      "reach": [120, 120], "carry": [220] * 4,
       "held": [160] * 4, "fall": [90] * 2, "land": [140, 140, 200, 300, 300, 300],
       "peek": [150, 120, 100, 100, 700, 250, 200, 400, 450, 450, 450, 450, 180, 900, 500, 150, 180, 160, 300]}
 
@@ -276,5 +309,6 @@ if __name__ == "__main__":
         meta[name] = {"w": 32, "h": 32, "frames": len(fr), "ms": MS[name]}
         assert len(MS[name]) == len(fr), name
     meta["peek"]["hidden_frame"] = PEEK_HIDDEN
+    meta["carry"]["hand"] = list(CARRY_HAND["xy"])      # 抓游標的手在圖上的位置（1 倍、還沒加上方留白）
     json.dump(meta, open(os.path.join(out, "anims_desktop.json"), "w"), indent=1)
     print("ok", {k: v["frames"] for k, v in meta.items()})

@@ -22,8 +22,15 @@ _head_front = v3.head_front
 
 
 def head_front(g, hx, hy, eyes, mouth, look, blush=False):
-    _head_front(g, hx, hy, eyes if eyes in ("open", "closed", "glow", "down") else "none", mouth, look, blush)
+    _head_front(g, hx, hy, eyes if eyes in ("open", "closed", "glow", "down") else "none",
+                mouth if mouth in ("dot", "open") else "none", look, blush)
     ey = hy + 2
+    if mouth == "wavy":          # 嫌棄的波浪嘴
+        for i, x in enumerate(range(hx - 2, hx + 3)):
+            px(g, x, hy + 7 + (i % 2), 10)
+    if eyes == "disgust":        # 嫌棄：臉上半部發黑的直線
+        for x in range(hx - 7, hx + 8, 2):
+            rect(g, x, hy, x, hy + 2, 12)
     for k, ex in enumerate((hx - 6, hx + 3)):
         e = ex + look
         if eyes == "blank":      # 眼神清空：白眼、只剩一個小點
@@ -31,6 +38,12 @@ def head_front(g, hx, hy, eyes, mouth, look, blush=False):
             rect(g, e, ey + 1, e + 2, ey + 3, 6)
             rect(g, e, ey + 4, e + 2, ey + 4, 1)
             px(g, e + 1, ey + 2, 8)
+        elif eyes == "disgust":  # 嫌棄：上眼皮壓很低、斜眼瞄過來
+            rect(g, e, ey + 1, e + 2, ey + 2, 1)
+            px(g, e + (0 if k == 0 else 2), ey + 1, 4)
+            rect(g, e, ey + 3, e + 2, ey + 3, 9)
+            rect(g, e, ey + 4, e + 2, ey + 4, 1)
+            px(g, e + (0 if look < 0 else 2), ey + 3, 10)
         elif eyes == "stern":    # 嚴肅：眉毛往中間壓、半閉眼
             px(g, e + (2 if k == 0 else 0), ey, 1)
             px(g, e + 1, ey - 1 if False else ey, 1)
@@ -95,6 +108,20 @@ def paper(g):
     px(g, 30, 1, 9)
 
 
+def qmark(x=25, y=0, col=6):
+    """頭上冒出的大問號：白字黑框（當機中）。"""
+    Q = [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."]
+    def f(g):
+        pts = [(x + 1 + i, y + 1 + j) for j, row in enumerate(Q) for i, ch in enumerate(row) if ch == "#"]
+        for qx, qy in pts:
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    px(g, qx + dx, qy + dy, 1)
+        for qx, qy in pts:
+            px(g, qx, qy, col)
+    return f
+
+
 def both(*fs):
     def f(g):
         for k in fs:
@@ -107,10 +134,10 @@ def headpat():
     F = v6.front
     return [
         F(dy=1, eyes="closed"),                                      # 按鈕觸發：頭被壓一下
-        F(eyes="blank"),                                             # 眼神清空
-        F(dy=1, eyes="blank"),                                       # 再被摸一下
-        F(eyes="blank"),
-        F(eyes="blank", arms="grip", extra=messy),                   # 身體僵直
+        F(eyes="blank", fx=qmark()),                                 # 眼神清空、頭上冒問號
+        F(dy=1, eyes="blank", fx=qmark(y=1)),                        # 再被摸一下
+        F(eyes="blank", fx=qmark()),
+        F(eyes="blank", arms="grip", extra=messy, fx=qmark(col=9)),  # 身體僵直（問號變紅）
         F(eyes="blank", arms="grip", extra=lambda g: (messy(g), ears(g)), fx=steam(2)),   # 耳朵染紅、冒煙
         F(eyes="blank", arms="grip", blush=True, extra=lambda g: (messy(g), ears(g)), fx=steam(4)),
         F(eyes="down", blush=True, extra=lambda g: (messy(g), ears(g), fix_hair(g))),     # 整理頭髮

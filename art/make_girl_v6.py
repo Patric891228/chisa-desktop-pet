@@ -23,13 +23,22 @@ def read(eyes="down", mouth="dot", dy=0, fx=None):
         rect(g, x0 - 1, o + 20 + dy, x0 + 3, o + 25 + dy, 1)
         rect(g, x0, o + 21 + dy, x0 + 2, o + 24 + dy, 11)
     bt = o + 20 + dy
-    rect(g, 8, bt - 1, 23, bt + 6, 1)           # 外框
-    rect(g, 9, bt, 22, bt, 6)                   # 上緣露出的書頁
-    rect(g, 9, bt + 1, 22, bt + 5, GREEN)       # 深綠書皮
-    rect(g, 15, bt + 1, 16, bt + 5, 1)          # 書背（中間摺線）
-    for cx in (12, 19):                         # 金色燙金標誌
-        px(g, cx, bt + 2, 14); px(g, cx - 1, bt + 3, 14); px(g, cx + 1, bt + 3, 14); px(g, cx, bt + 4, 14)
-    rect(g, 9, bt + 2, 10, bt + 3, 4); rect(g, 21, bt + 2, 22, bt + 3, 4)  # 雙手
+    # 攤開的書，從中間書脊往兩邊翹起：外側比中間高 2 格，上下緣都是弧線
+    def lift(x):
+        d = abs(x - 15.5) / 7.5
+        return round(2 * d * d)
+    for x in range(8, 24):
+        u = lift(x)
+        top, bot = bt - u, bt + 5 - u + (1 if x in (8, 23) else 0)
+        rect(g, x, top - 1, x, bot + 1, 1)                       # 外框
+        if 9 <= x <= 22:
+            rect(g, x, top, x, top, 6)                           # 上緣露出的書頁（跟著弧度）
+            rect(g, x, top + 1, x, bot, GREEN)                   # 深綠書皮
+    rect(g, 15, bt, 16, bt + 6, 1)                               # 書脊（最低點）
+    for cx in (12, 19):                                          # 金色燙金標誌（跟著弧度往上）
+        yy = bt - lift(cx)
+        px(g, cx, yy + 2, 14); px(g, cx - 1, yy + 3, 14); px(g, cx + 1, yy + 3, 14); px(g, cx, yy + 4, 14)
+    rect(g, 9, bt, 10, bt + 1, 4); rect(g, 21, bt, 22, bt + 1, 4)  # 雙手扶在翹起來的書邊
     return finish(g, o + 31, fx)
 
 
@@ -122,40 +131,89 @@ def front(fx=None, extra=None, **kw):
 
 
 # ---------- 社恐：躲在電線杆後面 ----------
-def pole_peek(dx, eyes="open", look=0, fx=None):
+def pole_peek(dx, eyes="open", look=0, fx=None, rise=1.0, wire=1.0, dust=False, **kw):
+    """rise：電線杆從地板下伸出來的比例（0 = 還在地下，1 = 整根）；wire：電線往兩邊拉出去的比例。"""
     W, H, o = 32, 32, 0
-    g = blank(W, H)
-    rect(g, 0, 2, 31, 2, 13); rect(g, 0, 6, 31, 6, 13)          # 電線
-    paste(g, v3.girl(raw=True, eyes=eyes, look=look), dx, o)
-    rect(g, 4, 3, 27, 4, v5.WOOD)                                # 橫擔
-    px(g, 6, 2, 6); px(g, 25, 2, 6); px(g, 10, 2, 6); px(g, 21, 2, 6)  # 礙子
-    rect(g, 11, 0, 20, 30, 1)                                    # 電線杆外框
-    rect(g, 12, 0, 19, 30, 8)
-    rect(g, 13, 0, 13, 30, 6)                                    # 亮邊
-    rect(g, 18, 0, 19, 30, 13)                                   # 暗邊
+    back, front_ = blank(W, H), blank(W, H)
+    n = round(15 * wire)                                         # 電線從杆子往兩邊拉
+    if n:
+        rect(back, 16 - n, 2, 15 + n, 2, 13); rect(back, 16 - n, 6, 15 + n, 6, 13)
+    rect(front_, 4, 3, 27, 4, v5.WOOD)                           # 橫擔
+    for x in (6, 25, 10, 21):                                    # 礙子
+        px(front_, x, 2, 6)
+    rect(front_, 11, 0, 20, 30, 1)                               # 電線杆外框
+    rect(front_, 12, 0, 19, 30, 8)
+    rect(front_, 13, 0, 13, 30, 6)                               # 亮邊
+    rect(front_, 18, 0, 19, 30, 13)                              # 暗邊
     for y in range(22, 27):                                      # 黃黑警示條紋
         for x in range(12, 20):
-            px(g, x, y, 14 if (x + y) % 4 < 2 else 1)
-    rect(g, 14, 8, 17, 11, 6); rect(g, 15, 9, 16, 10, 13)      # 小告示牌
+            px(front_, x, y, 14 if (x + y) % 4 < 2 else 1)
+    rect(front_, 14, 8, 17, 11, 6); rect(front_, 15, 9, 16, 10, 13)   # 小告示牌
+    off = round((1 - rise) * 31)
+
+    def sunk(layer):                                             # 往下移 off 格，地板（y=30）以下切掉
+        out = blank(W, H)
+        for y in range(H):
+            sy = y - off
+            if 0 <= sy < H and y <= 30:
+                out[y] = layer[sy][:]
+        return out
+
+    g = blank(W, H)
+    if rise > 0:
+        paste(g, sunk(back), 0, 0)
+    paste(g, v3.girl(raw=True, eyes=eyes, look=look, **kw), dx, o)
+    if rise > 0:
+        paste(g, sunk(front_), 0, 0)
     rect(g, 4, 31, 27, 31, v4.SHADOW)
+    if 0 < rise < 1 or dust:                                     # 地板裂開、碎屑
+        rect(g, 10, 30, 21, 30, 1)
+        for x, y in ((8, 29), (9, 28), (23, 29), (22, 28), (7, 27), (24, 27)):
+            px(g, x, y, 6)
     return finish(g, 31, fx)
+
+
+def lean_back(dx):
+    """上半身往後（觀眾右邊）縮 dx 格，腳不動：嫌棄地往後退。"""
+    def f(g):
+        for y in range(0, 25):
+            row = g[y]
+            g[y] = [0] * dx + row[:-dx]
+    return f
+
+
+def scribble(x, y):
+    """頭旁邊一團亂線（嫌棄、不爽）。"""
+    pts = [(1, 0), (2, 0), (3, 1), (2, 2), (1, 2), (0, 3), (1, 4), (2, 4), (3, 4), (4, 3), (4, 5), (3, 6), (2, 6), (1, 5)]
+    def f(g):
+        for dx, dy in pts:
+            px(g, x + dx, y + dy, 8)
+    return f
 
 
 def scenes():
     S = _v5_scenes()
     S["shy_pole"] = [
-        pole_peek(-7),
+        pole_peek(0, rise=0, fx=bang(28, 2)),                    # 被看到了！
+        pole_peek(0, eyes="closed", rise=0.35, wire=0),          # 地板下伸出電線杆
+        pole_peek(0, eyes="closed", rise=0.7, wire=0),
+        pole_peek(-2, rise=1, wire=0.4, dust=True),
+        pole_peek(-7),                                           # 躲好了，偷看
         pole_peek(-7, eyes="closed"),
         pole_peek(-1, look=1),
         pole_peek(4, fx=sweat(30, 6)),
         pole_peek(4, fx=both(sweat(30, 6), bang(29, 1))),
         pole_peek(-7),
+        pole_peek(-4, rise=0.6, wire=0.3, blush=True),          # 電線杆收回地板下
+        pole_peek(-2, rise=0.25, wire=0, blush=True),
+        pole_peek(0, rise=0, blush=True, eyes="down"),
     ]
     S["guard"] = [
         front(),
-        front(arms="grip", look=-1),
-        v5.mirror(v3.side(eyes="open")),
-        front(arms="grip", look=-1, dy=1, fx=sweat(4, 12)),
+        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", extra=lean_back(1)),
+        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", dy=1, extra=lean_back(2), fx=scribble(26, 3)),
+        v5.mirror(v3.side(eyes="closed", lean=-1)),
+        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", extra=lean_back(2), fx=scribble(26, 2)),
     ]
     S["shy"] = [
         front(dy=-1, mouth="open", fx=bang(28, 2)),
