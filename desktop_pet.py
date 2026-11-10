@@ -588,18 +588,29 @@ class Pet(QWidget):
         flip = self.facing_left
         pix, mask = self.sprites.frame(self.anim_name, self.frame, self.scale, flip)
         self.pix = pix
+        sc = self.scale
         S = QRect(int(round(self.cx - pix.width() / 2)), int(round(self.bottom - pix.height())),
                   pix.width(), pix.height())
-        U = S
         if self.bubble.isVisible():
+            # 說話時視窗大小固定（只移動、不縮放），避免視窗管理器縮放時殘影變成兩個對話框
             bp = self.bubble.pix
             g = self.screen_geo()
+            W = max(56 * sc, bp.width())
+            H = (35 - 3) * sc + bp.height()
+            wx = max(g.left(), min(g.right() + 1 - W, int(round(self.cx - W / 2))))
+            U = QRect(wx, int(round(self.bottom)) - H, W, H)
             bx = max(g.left(), min(g.right() + 1 - bp.width(), int(self.cx) - bp.width() // 2))
-            by = max(g.top(), S.top() + self.meta().get("pad_top", 0) * self.scale - bp.height())
+            by = S.top() + self.meta().get("pad_top", 0) * sc - bp.height()
             B = QRect(bx, by, bp.width(), bp.height())
-            U = S.united(B)
-        if self.geometry() != U:
+            B.moveLeft(max(U.left(), min(U.right() + 1 - B.width(), B.left())))
+            B.moveTop(max(U.top(), g.top(), B.top()))
+            U = U.united(S).united(B)
+        else:
+            U = S
+        if self.geometry().size() != U.size():
             self.setGeometry(U)
+        elif self.pos() != U.topLeft():
+            self.move(U.topLeft())
         self.sprite_rect = S.translated(-U.topLeft())
         region = QRegion(mask).translated(self.sprite_rect.topLeft())
         if self.bubble.isVisible():
@@ -1254,14 +1265,47 @@ def set_autostart(on):
                     "X-GNOME-Autostart-enabled=true\n")
 
 
+# ===== 同時只跑一隻：新開的會把舊的關掉（避免開機自動啟動＋手動再開，出現兩隻、兩個對話框）=====
+SERVER_NAME = "chisa-desktop-pet-" + (os.environ.get("USER") or os.environ.get("USERNAME") or "me")
+
+
+def take_over_instance():
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
+    sock = QLocalSocket()
+    sock.connectToServer(SERVER_NAME)
+    if sock.waitForConnected(300):              # 已經有一隻在跑：請她離開，等她關掉
+        sock.write(b"quit\n"); sock.flush()
+        sock.waitForBytesWritten(300)
+        sock.waitForDisconnected(3000)
+    sock.abort()
+    QLocalServer.removeServer(SERVER_NAME)
+    server = QLocalServer()
+    server.listen(SERVER_NAME)
+    return server
+
+
+def _on_other_instance(server, app):
+    c = server.nextPendingConnection()
+    if c is None:
+        return
+    def read():
+        if b"quit" in bytes(c.readAll()):
+            app.quit()
+    c.readyRead.connect(read)
+    if c.bytesAvailable():
+        read()
+
+
 def main():
     if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "xcb"   # Wayland 不准程式自己移動視窗，改走 XWayland
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("desktop-pet")
+    server = take_over_instance()
     pet = Pet(app)
     pet.show()
+    server.newConnection.connect(lambda: _on_other_instance(server, app))
     app.aboutToQuit.connect(pet.stats.save)
     sys.exit(app.exec())
 
