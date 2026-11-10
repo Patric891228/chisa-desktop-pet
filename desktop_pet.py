@@ -185,7 +185,7 @@ class Stats:
         self.last_seen = time.time()
         self.gift_log = {}           # 每種禮物送過幾次
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
-                         "sit_min": 50, "chime": True, "climb": True, "chase": True}
+                         "sit_min": 50, "chime": True, "climb": True, "chase": True, "stay": False}
 
     def load(self):
         try:
@@ -645,7 +645,11 @@ class Pet(QWidget):
             pool["climb"] = 1
         if st.get("chase", True) and s.energy >= 30:
             pool["chase"] = 1
-        if self.last_action in pool and len(pool) > 1:
+        if st.get("stay", False):                # 待在原地：不走不跑、不爬牆不追游標，多半發呆
+            pool = {"idle": 6, "read": 2, "swing": 1}
+            if is_pre_sleep(m) or s.energy < 25:
+                pool["snore"] = 3
+        if self.last_action in pool and len(pool) > 1 and not st.get("stay", False):
             pool.pop(self.last_action)
         a = random.choices(list(pool), weights=list(pool.values()))[0]
         self.last_action = a
@@ -676,6 +680,8 @@ class Pet(QWidget):
             loops = {"idle": (3, 6), "read": (6, 11), "snore": (3, 6), "swing": (2, 4), "desk_sleep_r": (4, 8),
                      "peek": (1, 1)}[a]
             self.facing_left = False if a in ("read", "desk_sleep_r") else self.facing_left
+            if self.stats.settings.get("stay", False) and a == "idle":
+                loops = (8, 16)                    # 待在原地時，發呆久一點，動作少一點
             self.play(a, random.randint(*loops))
 
     def enter_sleep(self):
@@ -1147,6 +1153,9 @@ class Pet(QWidget):
                         checked=int(self.stats.settings.get("sit_min", 50)) == m)
             a.triggered.connect(lambda _=False, m=m: self.stats.settings.__setitem__("sit_min", m))
             sgrp.addAction(a); sit.addAction(a)
+        a = QAction("待在原地（不走動）", st, checkable=True, checked=bool(self.stats.settings.get("stay", False)))
+        a.triggered.connect(lambda on: self.set_stay(on))
+        st.addAction(a)
         for label, key, fn in (("永遠在最上層", "on_top", self.apply_on_top),
                                ("照時間作息（午睡、晚上睡覺）", "schedule", self.set_schedule),
                                ("偶爾自言自語", "chat", None),
@@ -1197,6 +1206,12 @@ class Pet(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
         if not init:
             self.show()
+
+    def set_stay(self, on):
+        self.stats.settings["stay"] = on
+        if on and self.mode == "normal" and self.anim_name in ("walk", "run", "walk_weapon", "run_weapon", "peek"):
+            self.speed, self.on_arrive = 0, None
+            self.play("idle", 4)
 
     def quit(self):
         self.stats.settings["x"] = int(self.cx)
