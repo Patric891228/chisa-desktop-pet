@@ -51,8 +51,6 @@
 | 冷落 | 醒著時每 6 小時沒互動 −1，任何互動都會重新計時 |
 | 關掉程式時 | 禮物照常補；冷落最多算 24 小時；離開超過 1 小時精力回滿 |
 
-存檔位置：Linux `~/.config/desktop-pet/`、Windows `%APPDATA%\chisa-desktop-pet\`、macOS `~/Library/Application Support/chisa-desktop-pet/`。刪掉 `save.json` 就從頭開始。
-
 ## 對話框
 
 像素風，三種樣式可在設定切換。字型是內附的[俐方體 11 號（Cubic 11）](https://github.com/ACh-K/Cubic-11)，SIL OFL 1.1 授權（見 `fonts/`）。
@@ -67,25 +65,6 @@
 pip install -r requirements.txt
 python desktop_pet.py
 ```
-
-Linux 也可以直接 `bash run.sh`（會在資料夾裡建立 `.venv`）。Ubuntu／Debian 第一次要先 `sudo apt install python3-venv libxcb-cursor0`。
-
-測試用：`PET_TIME_SCALE=60 python desktop_pet.py`，數值的 1 小時變 1 分鐘。
-
-## 打包
-
-```bash
-pip install -r requirements.txt pyinstaller
-python packaging/build.py      # 產生在 dist/
-```
-
-在哪個系統執行就產生哪個系統的版本。推到 GitHub 後，Actions 會自動打包三個系統；推 `v` 開頭的標籤（例如 `git tag v0.1.0 && git push --tags`）會建立 Release 並附上下載檔。
-
-## 改內容
-
-- 台詞：`desktop_pet.py` 開頭的 `LINES`。
-- 規則數字：同一檔開頭的 `GIFT_*`、`NEGLECT_STEP_H`、`PAT_*`、`ENERGY_RATE`。
-- 動作圖：`assets/` 是 1 倍 PNG，由 `art/` 裡的 Python 程式畫出來（畫風說明見 `art/STYLE.md`，桌面版專用動作在 `art/make_desktop.py`）。改完執行 `bash tools/rebuild_assets.sh`（需要 Pillow）。
 
 ## 遇到問題
 
