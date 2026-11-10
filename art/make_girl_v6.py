@@ -160,11 +160,10 @@ def pole_peek(dx, eyes="open", look=0, fx=None, rise=1.0, wire=1.0, dust=False, 
         return out
 
     g = blank(W, H)
+    paste(g, v3.girl(raw=True, eyes=eyes, look=look, **kw), dx, o)   # 角色在最後面
     if rise > 0:
-        paste(g, sunk(back), 0, 0)
-    paste(g, v3.girl(raw=True, eyes=eyes, look=look, **kw), dx, o)
-    if rise > 0:
-        paste(g, sunk(front_), 0, 0)
+        paste(g, sunk(back), 0, 0)                               # 電線
+        paste(g, sunk(front_), 0, 0)                             # 電線杆
     rect(g, 4, 31, 27, 31, v4.SHADOW)
     if 0 < rise < 1 or dust:                                     # 地板裂開、碎屑
         rect(g, 10, 30, 21, 30, 1)
@@ -180,6 +179,35 @@ def lean_back(dx):
             row = g[y]
             g[y] = [0] * dx + row[:-dx]
     return f
+
+
+def anger(x, y):
+    """紅色的青筋符號（生氣／不好意思）。"""
+    pts = [(1, 0), (3, 0), (0, 1), (4, 1), (1, 3), (3, 3), (0, 3), (4, 3), (1, 4), (3, 4)]
+    pts = [(1, 0), (0, 1), (1, 1), (3, 0), (3, 1), (4, 1), (0, 3), (1, 3), (1, 4), (3, 3), (4, 3), (3, 4)]
+    def f(g):
+        for dx, dy in pts:
+            for ox in (-1, 0, 1):
+                for oy in (-1, 0, 1):
+                    px(g, x + dx + ox, y + dy + oy, 1) if g[min(max(y + dy + oy, 0), len(g) - 1)][min(max(x + dx + ox, 0), len(g[0]) - 1)] == 0 else None
+        for dx, dy in pts:
+            px(g, x + dx, y + dy, 9)
+    return f
+
+
+def tsun_side(eyes="closed", puff=False, fx=None):
+    """「哼」地轉頭：側面朝左、臉紅，嘴前面噴一小團氣。"""
+    g = v3.side(raw=True, eyes=eyes, lean=-1)
+    hx, hy = 15 - 1, 11
+    rect(g, hx + 3, hy + 7, hx + 6, hy + 7, 5)
+    px(g, hx + 4, hy + 7, 9); px(g, hx + 6, hy + 7, 9)
+    if puff:
+        for x, y in ((hx + 11, hy + 7), (hx + 12, hy + 6), (hx + 12, hy + 8), (hx + 13, hy + 7), (hx + 14, hy + 6)):
+            px(g, x, y, 6)
+    g = v5.mirror(g)
+    if fx:
+        fx(g)
+    return v4.up2(g)
 
 
 def scribble(x, y):
@@ -208,12 +236,13 @@ def scenes():
         pole_peek(-2, rise=0.25, wire=0, blush=True),
         pole_peek(0, rise=0, blush=True, eyes="down"),
     ]
+    # 防備（傲嬌）：臉紅、嘟嘴、冒青筋，然後「哼」地轉頭，偷偷回頭瞄一眼又轉回去
     S["guard"] = [
         front(),
-        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", extra=lean_back(1)),
-        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", dy=1, extra=lean_back(2), fx=scribble(26, 3)),
-        v5.mirror(v3.side(eyes="closed", lean=-1)),
-        front(eyes="disgust", look=-1, mouth="wavy", arms="grip", extra=lean_back(2), fx=scribble(26, 2)),
+        front(eyes="closed", mouth="wavy", blush=True, arms="front", fx=anger(25, 2)),
+        tsun_side(eyes="closed", puff=True),
+        tsun_side(eyes="open"),
+        tsun_side(eyes="closed", puff=True, fx=anger(3, 2)),
     ]
     S["shy"] = [
         front(dy=-1, mouth="open", fx=bang(28, 2)),
