@@ -1,6 +1,6 @@
-# Chisa 桌面寵物
+# 千咲-桌面寵物
 
-住在你桌面下緣的像素 Chisa：會散步、看書、午睡、扛著剪刀到處跑、偷看你的螢幕，摸頭前請先提交申請書。
+住在你桌面的像素千咲：會散步、看書、午睡、扛著剪刀到處跑、偷看你的螢幕，摸頭前請先提交申請書。
 
 *A tiny pixel-art Chisa who lives on your desktop. Windows / macOS / Linux.*
 
