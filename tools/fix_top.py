@@ -1,6 +1,6 @@
 """補回頭頂：原本的圖是 32 格高，角色往上起伏（dy=-1）時呆毛、頭頂和蝴蝶結的外框會超出畫布被切掉。
 這裡在每張圖上面加 PAD 格透明空間，補上被切掉的外框和呆毛，並更新 anims.json 的高度。
-用法：python3 tools/fix_top.py assets   （由 rebuild_assets.sh 呼叫；已處理過的動作會跳過）
+用法：python3 tools/fix_top.py assets   （由 tools/finish_assets.py 呼叫；已處理過的動作會跳過）
 """
 import json, os, sys
 from PIL import Image

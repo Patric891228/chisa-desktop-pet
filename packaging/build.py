@@ -8,7 +8,7 @@ import PyInstaller.__main__
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
 args = ["desktop_pet.py", "--name", "ChisaDesktopPet", "--noconfirm", "--clean", "--windowed",
-        "--add-data", "assets:assets", "--add-data", "fonts:fonts",
+        "--add-data", "characters:characters", "--add-data", "fonts:fonts",
         "--exclude-module", "tkinter"]
 if sys.platform == "darwin":
     args += ["--icon", "packaging/icon.icns", "--osx-bundle-identifier", "com.chisa-desktop-pet"]

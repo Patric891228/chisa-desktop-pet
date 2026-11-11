@@ -6,3 +6,4 @@ dist/
 *.spec
 *.zip
 *.tar.gz
+characters/*/review.html

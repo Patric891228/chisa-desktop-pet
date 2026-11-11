@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Chisa 桌面寵物（純軟體版）
-透明、置頂、可拖曳的像素角色，在螢幕下緣走動。素材來自 pixel-assets/girl_v7（1 倍 PNG，執行時放大）。
+"""像素桌面寵物引擎（純軟體版）
+透明、置頂、可拖曳的像素角色，在螢幕下緣走動。
+角色的圖、台詞、禮物都放在 characters/<角色>/（角色包），引擎本身跟角色無關；
+預設角色是千咲。新角色的做法見 docs/CHARACTER_GUIDE.md。
 
 操作：
   左鍵點她      互動選單：摸頭、送禮、看狀態、設定、離開
@@ -9,6 +11,7 @@
 
 數值存在 ~/.config/desktop-pet/save.json。
 測試用：PET_TIME_SCALE=60 python3 desktop_pet.py（數值的 1 小時變 1 分鐘）。
+換角色：PET_CHARACTER=<資料夾名稱> python3 desktop_pet.py，或從選單「設定 → 角色」切換。
 """
 import json, os, random, sys, time
 from datetime import datetime, date
@@ -24,14 +27,43 @@ from PySide6.QtCore import QPropertyAnimation, QTime
 __version__ = "0.1.2"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-ASSETS = os.path.join(HERE, "assets")
+CHAR_ROOT = os.path.join(HERE, "characters")
 if sys.platform == "win32":
     CONF_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "chisa-desktop-pet")
 elif sys.platform == "darwin":
     CONF_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "chisa-desktop-pet")
 else:
     CONF_DIR = os.path.join(os.path.expanduser("~"), ".config", "desktop-pet")
-SAVE = os.path.join(CONF_DIR, "save.json")
+
+
+def list_characters():
+    out = []
+    for d in sorted(os.listdir(CHAR_ROOT)) if os.path.isdir(CHAR_ROOT) else []:
+        if not d.startswith("_") and os.path.exists(os.path.join(CHAR_ROOT, d, "character.json")):
+            out.append(d)
+    return out
+
+
+def chosen_character():
+    chars = list_characters()
+    cid = os.environ.get("PET_CHARACTER")
+    if not cid:
+        try:
+            cid = open(os.path.join(CONF_DIR, "character.txt"), encoding="utf-8").read().strip()
+        except OSError:
+            cid = None
+    if cid not in chars:
+        cid = "chisa" if "chisa" in chars else (chars[0] if chars else None)
+    if cid is None:
+        sys.exit("找不到任何角色包（characters/<角色>/character.json）")
+    return cid
+
+
+CHAR_ID = chosen_character()
+CHAR_DIR = os.path.join(CHAR_ROOT, CHAR_ID)
+CHAR = json.load(open(os.path.join(CHAR_DIR, "character.json"), encoding="utf-8"))
+ASSETS = os.path.join(CHAR_DIR, "assets")
+SAVE = os.path.join(CONF_DIR, "save.json" if CHAR_ID == "chisa" else f"save_{CHAR_ID}.json")   # 千咲沿用舊存檔
 TIME_SCALE = float(os.environ.get("PET_TIME_SCALE", "1"))
 HOUR = 3600.0
 
@@ -42,78 +74,25 @@ NEGLECT_STEP_H = 6                 # 每 6 小時沒理她，好感 -1
 PAT_GAIN, PAT_DAILY = 1, 5         # 每天前 5 次摸頭各 +1
 WAKE_GRACE_S = 5 * 60              # 睡覺時段被叫醒，5 分鐘沒互動就回去睡
 
-# 每秒精力變化（負的是消耗）
-ENERGY_RATE = {"walk": -0.05, "run": -0.15, "walk_weapon": -0.08, "run_weapon": -0.2, "swing": -0.25,
-               "climb": -0.2, "hang": -0.05, "stretch": 0.05,
+# 每秒精力變化（負的是消耗）；角色包的 energy_rate 可以覆寫或補充
+ENERGY_RATE = {"walk": -0.05, "run": -0.15, "climb": -0.2, "hang": -0.05, "stretch": 0.05,
                "idle": 0.03, "read": 0.06, "snore": 0.15, "desk_sleep_r": 0.2, "bed_sleep_r": 0.25}
+ENERGY_RATE.update(CHAR.get("energy_rate", {}))
 
-LINES = {
-    "pat": ["……！？", "請、請不要突然這樣。", "摸頭要先提交申請書。", "……申請書呢？", "只准一下下。",
-            "下次記得先說一聲。", "……哼，就這次。", "嗯……再一下也可以。"],
-    "pat_cap": ["今天的摸頭額度用完了。", "再摸就要收費了。"],
-    "pat_spam": ["系統過熱……", "等、等一下……！"],
-    "gift": ["……給我的？謝謝。", "我、我會收好的。", "謝謝，我很喜歡。", "又是禮物？……謝謝。", "我會好好珍惜的。"],
-    "no_gift": ["禮物送完了，{h} 後會再補一個。"],
-    "sleepy": ["嗯……是誰……", "還想睡……", "……現在幾點？"],
-    "drag": ["放、放我下來！", "……！？", "我不是行李。"],
-    "land": ["……剛剛的事當作沒發生。", "嗚……", "下次先說一聲。"],
-    "peek": ["……你在做什麼？", "我只是路過。", "……盯。", "沒、沒有在偷看。"],
-    "tired": ["有點累了……", "想休息一下。"],
-    "chat": ["……", "今天也要安靜地過。", "（翻書）", "你在忙嗎？", "今天的天氣，還可以。", "剪刀要定期保養。",
-             "累了就休息一下吧。"],
-    "morning": ["早安。……我還沒完全醒。"],
-    "lunch": ["該吃午餐了吧？"],
-    "late": ["已經很晚了，你也該睡了。"],
-    "neglect": ["……（看了你一眼）", "……你還在嗎？"],
-    "sit": ["已經坐 {m} 分鐘了，起來動一動吧。", "坐太久了。站起來，跟我一起伸懶腰。", "休息一下，眼睛看看遠方。"],
-    "sit_back": ["歡迎回來。", "休息夠了嗎？"],
-    "busy": ["等一下，我在忙。", "現在不行……！"],
-    "climb_top": ["這裡視野不錯。", "……好高。", "（往下看）"],
-    "hide": ["我先躲一下，有事再叫我。", "待會見！", "休息一下～"],
-    "back": ["回來了。", "……有叫我嗎？", "我回來了。"],
-    "pin_go": ["好，我待在這裡。", "這裡嗎？好。"],
-    "climb_jump": ["嘿！", "……跳了。"],
-    "climb_down": ["到了。", "下來了。"],
-}
+# 台詞全部來自角色包（key 的意思見 docs/CHARACTER_GUIDE.md）；缺的 key 就不說話
+LINES = CHAR.get("lines", {})
 
-# 禮物：照《鳴潮》千咲的角色資料（喜歡手工、剪裁、計算、巧克力棒，覺得比草莓口味好吃；討厭辣的食物）
-# 名稱、喜好（love/like/normal/dislike）、好感變化、台詞、12x12 像素圖示
-GIFTS = {
-    "choco":    {"name": "巧克力棒", "pref": "love", "gain": 10,
-                 "lines": ["……巧克力棒。你怎麼知道的？", "這個口味最好吃。……謝謝。"]},
-    "paper":    {"name": "剪紙用的色紙", "pref": "like", "gain": 6,
-                 "lines": ["色紙……我來剪一個最漂亮的給你。", "這個顏色，很適合剪花。"]},
-    "sewing":   {"name": "布料和針線", "pref": "like", "gain": 5,
-                 "lines": ["布料的紋路很整齊。……可以做點東西。", "針腳要算好間距才漂亮。"]},
-    "astrite":  {"name": "星聲", "pref": "normal", "gain": 3,
-                 "lines": ["星聲……這是要我拿去抽卡嗎？", "……你自己留著抽吧。"]},
-    "strawberry": {"name": "草莓口味巧克力棒", "pref": "normal", "gain": 2,
-                   "lines": ["草莓口味的……也可以。", "……原味的比較好吃。"]},
-    "spicy":    {"name": "辣味零食", "pref": "dislike", "gain": -2,
-                 "lines": ["……這是在挑戰我嗎？", "辣的不行。拿走。"]},
-}
+# 禮物：名稱、喜好（love/like/normal/dislike）、好感變化、台詞、12x12 像素圖示，全部來自角色包
+GIFTS = {gid: {k: v for k, v in g.items() if k != "icon"} for gid, g in CHAR.get("gifts", {}).items()}
+GIFT_ICONS = {gid: g["icon"] for gid, g in CHAR.get("gifts", {}).items() if "icon" in g}
 PREF_TEXT = {"love": "♥♥♥ 最喜歡", "like": "♥♥ 喜歡", "normal": "♥ 普通", "dislike": "✕ 討厭"}
-GIFT_ICONS = {
-    "choco": ["............", "........KK..", ".......KBBK.", "......KBCBK.", ".....KBCBK..", "....KWWBK...",
-              "...KRWWK....", "..KRRRK.....", ".KRRRK......", ".KRRK.......", "..KK........", "............"],
-    "paper": ["............", ".KKKKKKKK...", ".KRRRRRRK...", ".KRRKKKKKKK.", ".KRRKGGGGGK.", ".KRRKGGGGGK.",
-              ".KKKKKKKKKKK", "...KNNNNNNNK", "...KNNNNNNNK", "...KNNNNNNNK", "...KKKKKKKKK", "............"],
-    "sewing": ["............", "..KKKKKK....", "..KBBBBK..K.", "...KRRK...K.", "...KRRK...K.", "...KRRK..KAK",
-               "...KRRK..KAK", "...KRRK..KAK", "..KBBBBK.KAK", "..KKKKKK..K.", "............", "............"],
-    "astrite": [".....KK.....", "....KGGK....", "...KGWGGK...", "..KGWGGGGK..", ".KGGGGGGGGK.", "KGGGGWGGGGGK",
-                ".KGGGGGGGGK.", "..KGGGGGGK..", "...KGGGGK...", "....KGGK....", ".....KK.....", "............"],
-    "strawberry": ["............", "........KK..", ".......KPPK.", "......KPRPK.", ".....KPRPK..", "....KWWPK...",
-                   "...KRWWK....", "..KRRRK.....", ".KRRRK......", ".KRRK.......", "..KK........", "............"],
-    "spicy": ["............", "..KKKKKKKK..", "..KRRRRRRK..", "..KRRWWRRK..", "..KRWNNWRK..", "..KRWRRWRK..",
-              "..KRWRRWRK..", "..KRRWWRRK..", "..KRRRRRRK..", "..KRRRRRRK..", "..KKKKKKKK..", "............"],
-}
 ICON_COLORS = {"K": (16, 12, 24), "A": (96, 94, 112), "B": (110, 62, 36), "C": (160, 100, 60), "G": (222, 178, 64), "W": (255, 255, 255), "R": (240, 52, 60),
                "D": (140, 10, 30), "N": (34, 92, 60), "L": (90, 170, 80), "P": (246, 186, 190)}
 
 
 def gift_icon(gid):
     from PySide6.QtGui import QImage
-    rows = GIFT_ICONS[gid]
+    rows = GIFT_ICONS.get(gid, ["." * 12] * 12)
     img = QImage(12, 12, QImage.Format_ARGB32)
     img.fill(Qt.transparent)
     for y, row in enumerate(rows):
@@ -128,8 +107,7 @@ def chime_line(h):
         "下午" if h < 18 else "晚上"
     h12 = h if h <= 12 else h - 12
     t = f"{period} {h12} 點"
-    extra = {7: "……再五分鐘。", 8: "今天也要好好加油。", 12: "吃飯時間到了。", 14: "要不要喝點水？",
-             15: "下午茶時間。", 17: "快下班了吧？", 18: "晚餐吃什麼？", 22: "準備休息吧。"}
+    extra = {int(k): v for k, v in CHAR.get("chime_extra", {}).items()}
     if h in extra:
         return f"{t}。{extra[h]}"
     if 9 <= h <= 11:
@@ -139,16 +117,15 @@ def chime_line(h):
     return f"{t}了。"
 
 STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看書", "snore": "打瞌睡",
-               "swing": "練剪刀", "walk_weapon": "扛著剪刀散步", "run_weapon": "扛著剪刀跑步",
-               "desk_sleep_r": "趴在桌上午睡", "bed_sleep_r": "睡覺", "headpat": "被摸頭（當機中）",
-               "shy_pole": "躲在電線桿後面", "guard": "防備", "shy": "害羞", "gift": "收禮物",
-               "sleepy": "睡眼惺忪", "peace": "比耶", "jolt": "嚇一跳", "held": "被拎起來", "fall": "往下掉", "land": "落地",
-               "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰"}
-REACTIONS = ("shy_pole", "guard", "shy")
+               "desk_sleep_r": "趴在桌上午睡", "bed_sleep_r": "睡覺", "headpat": "被摸頭", "gift": "收禮物",
+               "sleepy": "睡眼惺忪", "held": "被拎起來", "fall": "往下掉", "land": "落地", "peek": "偷看你的螢幕",
+               "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰", "peace": "比耶", "jolt": "嚇一跳"}
+STATUS_TEXT.update(CHAR.get("status_text", {}))
+REACTIONS = tuple(CHAR.get("pat_reactions", []))     # 摸頭之後隨機接一個（角色包決定）
+EXTRA = CHAR.get("extra_anims", {})                    # 角色專屬動作：姿勢、會不會移動、出現機率
 
 # ===== 轉換動作：依「前一個動作的姿勢 → 下一個動作的姿勢」自動插入 =====
 POSTURE = {"walk": "side", "run": "side",
-           "walk_weapon": "weapon", "run_weapon": "weapon", "swing": "weapon",
            "read": "book", "desk_sleep_r": "desk", "bed_sleep_r": "bed", "snore": "doze",
            "climb": "wall", "hang": "wall"}
 TRANS_CLIPS = {"turn", "turn_back", "draw_weapon", "sheath", "book_open", "book_close", "desk_in", "desk_out",
@@ -157,6 +134,7 @@ TO_FRONT = {"side": ["turn_back"], "weapon": ["sheath", "turn_back"], "book": ["
             "desk": ["desk_out"], "bed": ["bed_out"], "doze": ["jolt"], "wall": ["wall_land", "turn_back"]}
 FROM_FRONT = {"side": ["turn"], "weapon": ["turn", "draw_weapon"], "book": ["book_open"],
               "desk": ["desk_in"], "bed": ["bed_in"]}
+POSTURE.update({n: e["posture"] for n, e in EXTRA.items() if e.get("posture")})
 FACE_NEW = {"turn", "draw_weapon"}          # 這些轉換格用「新的」朝向播
 
 
@@ -186,12 +164,18 @@ def transition_clips(a, b):
     if pa == "doze" and pb in ("desk", "bed"):
         return FROM_FRONT[pb][:]
     return pre + TO_FRONT.get(pa, []) + FROM_FRONT.get(pb, [])
-FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch",
-              "book_open", "book_close", "desk_in", "desk_out", "bed_in", "bed_out", "jolt", "relax"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
+FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "peace",
+              "book_open", "book_close", "desk_in", "desk_out", "bed_in", "bed_out", "jolt", "relax"}
+FRONT_ONLY |= {n for n, e in EXTRA.items() if e.get("front_only")}
+# 會移動的動作與速度（每秒幾個 1 倍像素）、原地動作播幾輪
+MOVE_SPEED = {"walk": 7, "run": 20}
+MOVE_SPEED.update({n: e["move"] for n, e in EXTRA.items() if e.get("move")})
+LOOPS = {"idle": (3, 6), "read": (6, 11), "snore": (3, 6), "desk_sleep_r": (4, 8), "peek": (1, 1)}
+LOOPS.update({n: tuple(e["loops"]) for n, e in EXTRA.items() if e.get("loops")})   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
 
 def pick(key):
-    return random.choice(LINES[key])
+    return random.choice(LINES[key]) if LINES.get(key) else None
 
 
 def minute_of_day():
@@ -226,7 +210,8 @@ class Stats:
         self.gift_log = {}           # 每種禮物送過幾次
         self.events = {}             # 今日行事曆：{"2026-11-11": [{"t": "15:30", "text": "開會"}, ...]}
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
-                         "sit_min": 50, "chime": True, "climb": True, "stay": False}
+                         "sit_min": 50, "chime": True, "climb": True, "stay": False,
+                         "passthrough": False}
 
     def load(self):
         try:
@@ -689,7 +674,7 @@ class Pet(QWidget):
     # ---------- 播放 ----------
     def play(self, name, loops=1, speed=0.0, target=None, smooth=True):
         """播放動作；跟前一個動作姿勢不同時，先自動播轉換格（轉身、抽剪刀、拿書……）。"""
-        clips = transition_clips(self.anim_name, name) if smooth else []
+        clips = [c for c in transition_clips(self.anim_name, name) if self.has(c)] if smooth else []
         if clips:
             self.trans = (clips, (name, loops, speed, target))
             self.next_clip()
@@ -705,6 +690,8 @@ class Pet(QWidget):
         self._start(clip, 1)
 
     def _start(self, name, loops=1, speed=0.0, target=None):
+        if not self.has(name):                       # 角色包沒有這個動作：用發呆代替
+            name, speed = "idle", 0.0
         if name in FRONT_ONLY or (posture(name) == "front" and name not in TRANS_CLIPS):
             self.facing_left = False
         self.anim_name, self.frame, self.frame_t = name, 0, 0.0
@@ -774,35 +761,49 @@ class Pet(QWidget):
             p.drawPixmap(self.bubble_rect.topLeft(), self.bubble.pix)
 
     # ---------- 行為 ----------
+    def has(self, name):
+        return name in self.sprites.meta
+
+    def pool_of(self, pool):
+        """只留角色包裡有的動作。"""
+        return {a: w for a, w in pool.items() if w > 0 and (a == "climb" or self.has(a))}
+
     def pick_next(self):
         self.mode = "normal"
         s = self.stats
+        stationary = {"idle", "read", "snore"} | {n for n, e in EXTRA.items() if e.get("stay_pool")}
         if self.bubble.isVisible():                  # 說話中不換動作：原地繼續，講完再說
             cur = self.anim_name
-            if cur in ("idle", "read", "snore", "swing"):
+            if cur in stationary:
                 self._start(cur, 1)
             else:
                 self.play("idle", 1)
             return
         m = minute_of_day()
-        pool = {"idle": 3, "walk": 3, "run": 2, "read": 2, "walk_weapon": 1, "run_weapon": 1, "swing": 1, "peek": 1}
+        pool = {"idle": 3, "walk": 3, "run": 2, "read": 2, "peek": 1}
+        pool.update({n: e.get("pool", 0) for n, e in EXTRA.items()})
         if is_pre_sleep(m):
             pool["snore"] = 2
         if s.energy < 25:                        # 累了：多休息，少跑步
             pool = {"idle": 2, "read": 3, "snore": 3, "desk_sleep_r": 2, "walk": 1}
         elif s.energy < 50:
-            pool.pop("run", None); pool.pop("run_weapon", None)
+            pool.pop("run", None)
+            for n, e in EXTRA.items():
+                if e.get("tiring"):
+                    pool.pop(n, None)
         st = s.settings
-        if st.get("climb", True) and s.energy >= 40:
+        if st.get("climb", True) and s.energy >= 40 and self.has("climb") and self.has("hang"):
             pool["climb"] = 1
         px_pin = self.pin_x()
         if px_pin is not None and abs(self.cx - px_pin) > 3 * self.scale:   # 固定位置：被拖走了就走回去
             self.play("walk", 0, 9 * self.scale, target=px_pin)
             return
         if st.get("stay", False) or px_pin is not None:   # 待在原地／固定位置：不走不跑、不爬牆，多半發呆
-            pool = {"idle": 6, "read": 2, "swing": 1}
+            pool = {"idle": 6, "read": 2}
+            pool.update({n: e.get("stay_pool", 0) for n, e in EXTRA.items()})
             if is_pre_sleep(m) or s.energy < 25:
                 pool["snore"] = 3
+        pool = self.pool_of(pool) or {"idle": 1}
         if self.last_action in pool and len(pool) > 1 and not st.get("stay", False) and px_pin is None:
             pool.pop(self.last_action)
         a = random.choices(list(pool), weights=list(pool.values()))[0]
@@ -813,33 +814,32 @@ class Pet(QWidget):
         g = self.screen_geo()
         if a == "climb":
             self.start_climb(); return
-        if a in ("walk", "run", "walk_weapon", "run_weapon"):
+        if a in MOVE_SPEED:
             name = a
             hw = self.half_w(name)
             lo, hi = g.left() + hw, g.right() + 1 - hw
-            dist = random.uniform(80, 500) * (1.6 if "run" in a else 1)
+            dist = random.uniform(80, 500) * (1.6 if MOVE_SPEED[a] >= 15 else 1)
             tx = self.cx + random.choice((-1, 1)) * dist
             if not lo <= tx <= hi:
                 tx = self.cx - (tx - self.cx)
             tx = max(lo, min(hi, tx))
             if abs(tx - self.cx) < 20:
                 self.play("idle", random.randint(2, 4)); return
-            px_per_s = {"walk": 7, "walk_weapon": 5, "run": 20, "run_weapon": 18}[name] * self.scale
-            self.play(name, 0, px_per_s, target=tx)
+            self.play(name, 0, MOVE_SPEED[name] * self.scale, target=tx)
         else:
-            loops = {"idle": (3, 6), "read": (6, 11), "snore": (3, 6), "swing": (2, 4), "desk_sleep_r": (4, 8),
-                     "peek": (1, 1)}[a]
-            self.facing_left = False if a in ("read", "desk_sleep_r") else self.facing_left
+            loops = LOOPS.get(a, (2, 4))
             if (self.stats.settings.get("stay", False) or self.pin_x() is not None) and a == "idle":
                 loops = (8, 16)                    # 待在原地時，發呆久一點，動作少一點
             self.play(a, random.randint(*loops))
 
     def enter_sleep(self):
+        """睡覺動作沒有的話，用打瞌睡或發呆代替（_start 會處理）。"""
         self.mode = "sleep"
         self.woken_at = None
         self.facing_left = False
         self.queue.clear()
-        self.play("desk_sleep_r" if is_nap(minute_of_day()) else "bed_sleep_r", 0)
+        want = "desk_sleep_r" if is_nap(minute_of_day()) else "bed_sleep_r"
+        self.play(want if self.has(want) else "snore", 0)
 
     def react(self, steps):
         """steps：[(動畫, 輪數, 說的話), ...] 依序播。"""
@@ -853,7 +853,7 @@ class Pet(QWidget):
         name, loops, line = self.queue.pop(0)
         self.play(name, loops)
         icon = None
-        if name in ("gift", "guard") and getattr(self, "gift_icon_pending", None) is not None and line:
+        if getattr(self, "gift_icon_pending", None) is not None and line and self.mode == "react":
             icon, self.gift_icon_pending = self.gift_icon_pending, None
         self.say(line, icon)
 
@@ -909,7 +909,8 @@ class Pet(QWidget):
         elif s.pats_today == PAT_DAILY + 2:
             line = pick("pat_cap")
         s.pats_today += 1
-        self.react([("headpat", 1, None), (random.choice(REACTIONS), 1, line)])
+        reacts = [r for r in REACTIONS if self.has(r)] or ["idle"]
+        self.react([("headpat", 1, None), (random.choice(reacts), 1, line)])
 
     def do_gift(self, gid=None):
         s = self.stats
@@ -918,7 +919,7 @@ class Pet(QWidget):
             return
         pre = self.wake_prefix()
         if s.gift_stock == 0:
-            msg = pick("no_gift").format(h=fmt_hours(s.gift_eta() / TIME_SCALE))
+            msg = (pick("no_gift") or "禮物送完了，{h} 後補一個。").format(h=fmt_hours(s.gift_eta() / TIME_SCALE))
             if pre:
                 self.react(pre + [("idle", 1, msg)])
             else:
@@ -930,8 +931,8 @@ class Pet(QWidget):
         s.add_affection(gift["gain"])
         s.gift_log[gid] = s.gift_log.get(gid, 0) + 1
         line = random.choice(gift["lines"])
-        steps = {"love": [("gift", 2, line), ("shy", 1, None)], "like": [("gift", 2, line)],
-                 "normal": [("gift", 1, line)], "dislike": [("guard", 1, line)]}[gift["pref"]]
+        plan = CHAR.get("gift_reactions", {}).get(gift["pref"]) or [["gift", 1]]
+        steps = [(n if self.has(n) else "idle", k, line if i == 0 else None) for i, (n, k) in enumerate(plan)]
         self.gift_icon_pending = gift_icon(gid)
         self.react(pre + steps)
         self.stats.save()
@@ -1167,7 +1168,7 @@ class Pet(QWidget):
             self.next_sit = now + 10 * 60 / TIME_SCALE                # 沒休息的話，10 分鐘後再提醒
             self.sit_reminded = True
             mins = int((now - self.sit_start) * TIME_SCALE // 60)
-            self.react([("stretch", 2, pick("sit").format(m=mins))])
+            self.react([("stretch", 2, (pick("sit") or "坐 {m} 分鐘了，起來動一動吧。").format(m=mins))])
 
     def check_chime(self):
         h = minute_of_day() // 60
@@ -1199,6 +1200,9 @@ class Pet(QWidget):
             menu.addSeparator()
             menu.addAction("離開", self.quit)
             return
+        if self.stats.settings.get("passthrough"):
+            menu.addAction("取消滑鼠穿透（可以再點她）", lambda _=False: self.set_passthrough(False))
+            menu.addSeparator()
         menu.addAction("看她的狀態", self.show_panel)
         n = len(self.today_events())
         menu.addAction(f"今日行事曆…（{n} 件）" if n else "今日行事曆…", self.show_calendar)
@@ -1211,6 +1215,12 @@ class Pet(QWidget):
         else:
             info = hm.addAction("（從通知欄的圖示叫她回來）")
             info.setEnabled(False)
+        if not self.stats.settings.get("passthrough"):
+            if self.tray is not None:
+                menu.addAction("滑鼠穿透（防誤觸，從通知欄取消）", lambda _=False: self.set_passthrough(True))
+            else:
+                a = menu.addAction("滑鼠穿透（找不到通知欄，無法使用）")
+                a.setEnabled(False)
         menu.addSeparator()
         st = menu.addMenu("設定")
         size = st.addMenu("大小")
@@ -1253,6 +1263,18 @@ class Pet(QWidget):
             a = QAction(label, st, checkable=True, checked=bool(self.stats.settings.get(key, True)))
             a.triggered.connect(lambda on, key=key, fn=fn: (self.stats.settings.__setitem__(key, on), fn and fn(on)))
             st.addAction(a)
+        chars = list_characters()
+        if len(chars) > 1:                          # 裝了好幾個角色包：可以切換（會重新啟動）
+            cm = st.addMenu("角色")
+            cgrp = QActionGroup(cm)
+            for cid in chars:
+                try:
+                    nm = json.load(open(os.path.join(CHAR_ROOT, cid, "character.json"), encoding="utf-8")).get("name", cid)
+                except (OSError, ValueError):
+                    nm = cid
+                a = QAction(nm, cm, checkable=True, checked=cid == CHAR_ID)
+                a.triggered.connect(lambda _=False, c=cid: self.switch_character(c))
+                cgrp.addAction(a); cm.addAction(a)
         a = QAction("開機自動啟動", st, checkable=True, checked=autostart_enabled())
         a.triggered.connect(set_autostart)
         st.addAction(a)
@@ -1271,10 +1293,36 @@ class Pet(QWidget):
             self.tray_menu = QMenu()
             self.tray_menu.aboutToShow.connect(lambda: (self.tray_menu.clear(), self.build_menu(self.tray_menu)))
             self.tray.setContextMenu(self.tray_menu)
-            self.tray.setToolTip("Chisa 桌面寵物")
-            self.tray.activated.connect(lambda r: (self.come_back() if self.mode in ("hidden", "fading") else self.show_panel())
-                                        if r == QSystemTrayIcon.Trigger else None)
+            self.tray.setToolTip(CHAR.get("title", CHAR.get("name", "桌面寵物")))
+            self.tray.activated.connect(lambda r: self.tray_click() if r == QSystemTrayIcon.Trigger else None)
             self.tray.show()
+        if self.stats.settings.get("passthrough"):
+            if self.tray is None:                  # 沒有通知欄就沒辦法關掉穿透，開機時直接取消
+                self.stats.settings["passthrough"] = False
+            else:
+                self.set_passthrough(True, quiet=True)
+
+    def tray_click(self):
+        if self.mode in ("hidden", "fading"):
+            self.come_back()
+        elif self.stats.settings.get("passthrough"):
+            self.set_passthrough(False)
+        else:
+            self.show_panel()
+
+    # ---------- 滑鼠穿透 ----------
+    def set_passthrough(self, on, quiet=False):
+        """滑鼠點擊直接穿過她（防誤觸）。只能從通知欄圖示取消。"""
+        self.stats.settings["passthrough"] = bool(on)
+        self.setWindowFlag(Qt.WindowTransparentForInput, bool(on))
+        self.show()
+        self.redraw()
+        if self.tray is not None:
+            base = CHAR.get("title", CHAR.get("name", "桌面寵物"))
+            self.tray.setToolTip(base + ("（滑鼠穿透中，點這裡取消）" if on else ""))
+        if not quiet:
+            self.say(pick("passthrough_on" if on else "passthrough_off")
+                     or ("那我就不打擾你點東西了。" if on else "又可以碰到我了。"))
 
     def set_scale(self, k):
         self.scale_was = self.scale
@@ -1416,9 +1464,21 @@ class Pet(QWidget):
 
     def set_stay(self, on):
         self.stats.settings["stay"] = on
-        if on and self.mode == "normal" and self.anim_name in ("walk", "run", "walk_weapon", "run_weapon", "peek"):
+        if on and self.mode == "normal" and (self.anim_name in MOVE_SPEED or self.anim_name == "peek"):
             self.speed, self.on_arrive = 0, None
             self.play("idle", 4)
+
+    def switch_character(self, cid):
+        if cid == CHAR_ID:
+            return
+        os.makedirs(CONF_DIR, exist_ok=True)
+        with open(os.path.join(CONF_DIR, "character.txt"), "w", encoding="utf-8") as f:
+            f.write(cid)
+        self.stats.settings["x"] = int(self.cx)
+        self.stats.save()
+        import subprocess
+        env = dict(os.environ); env.pop("PET_CHARACTER", None)
+        subprocess.Popen(launch_cmd(), env=env)       # 新的那隻開起來時會請這隻離開
 
     def quit(self):
         self.stats.settings["x"] = int(self.cx)
@@ -1482,7 +1542,7 @@ def set_autostart(on):
                     '<key>RunAtLoad</key><true/></dict></plist>\n')
         else:
             exe = " ".join(f'"{c}"' for c in cmd)
-            f.write("[Desktop Entry]\nType=Application\nName=Chisa 桌面寵物\n"
+            f.write(f"[Desktop Entry]\nType=Application\nName={CHAR.get('title', '桌面寵物')}\n"
                     f"Exec=env QT_QPA_PLATFORM=xcb {exe}\n"
                     "X-GNOME-Autostart-enabled=true\n")
 

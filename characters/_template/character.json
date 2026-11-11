@@ -1,0 +1,98 @@
+{
+ "id": "new_character",
+ "name": "新角色",
+ "title": "新角色桌面寵物",
+ "about": "一句介紹。",
+ "lines": {
+  "pat": [
+   "……！"
+  ],
+  "pat_cap": [],
+  "pat_spam": [],
+  "gift": [],
+  "no_gift": [
+   "禮物送完了，{h} 後會再補一個。"
+  ],
+  "sleepy": [],
+  "drag": [],
+  "land": [],
+  "peek": [],
+  "tired": [],
+  "chat": [],
+  "morning": [],
+  "lunch": [],
+  "late": [],
+  "neglect": [],
+  "sit": [
+   "已經坐了 {m} 分鐘了，起來動一動吧。"
+  ],
+  "sit_back": [],
+  "busy": [],
+  "climb_top": [],
+  "climb_jump": [],
+  "climb_down": [],
+  "hide": [],
+  "back": [],
+  "pin_go": [],
+  "passthrough_on": [],
+  "passthrough_off": []
+ },
+ "chime_extra": {
+  "12": "吃飯時間到了。"
+ },
+ "gifts": {
+  "cookie": {
+   "name": "餅乾",
+   "pref": "like",
+   "gain": 6,
+   "lines": [
+    "謝謝！"
+   ],
+   "icon": [
+    "............",
+    "....KKKK....",
+    "..KKCCCCKK..",
+    ".KCCBCCCCCK.",
+    ".KCCCCCBCCK.",
+    "KCBCCCCCCCCK",
+    "KCCCCCBCCCCK",
+    "KCCCBCCCCBCK",
+    ".KCCCCCCCCK.",
+    ".KCBCCCCCCK.",
+    "..KKCCCCKK..",
+    "....KKKK...."
+   ]
+  }
+ },
+ "status_text": {},
+ "energy_rate": {},
+ "pat_reactions": [],
+ "gift_reactions": {
+  "love": [
+   [
+    "gift",
+    2
+   ]
+  ],
+  "like": [
+   [
+    "gift",
+    1
+   ]
+  ],
+  "normal": [
+   [
+    "gift",
+    1
+   ]
+  ],
+  "dislike": [
+   [
+    "idle",
+    1
+   ]
+  ]
+ },
+ "extra_anims": {},
+ "notes": "欄位說明見 docs/CHARACTER_GUIDE.md。空的台詞清單就是不說話。"
+}
