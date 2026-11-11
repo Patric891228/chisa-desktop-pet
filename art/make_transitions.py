@@ -191,7 +191,6 @@ CLIPS = {
     "bed_out": (bed_out, [300, 260, 300], None),
     "wall_jump": (wall_jump, [140, 160], None),
     "wall_land": (wall_land, [180], None),
-    "crouch": (crouch, [90, 200], None),
     "jolt": (jolt, [260, 300], None),
     "relax": (relax, [260], None),
 }

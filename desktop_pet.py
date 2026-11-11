@@ -42,7 +42,7 @@ WAKE_GRACE_S = 5 * 60              # 睡覺時段被叫醒，5 分鐘沒互動�
 
 # 每秒精力變化（負的是消耗）
 ENERGY_RATE = {"walk": -0.05, "run": -0.15, "walk_weapon": -0.08, "run_weapon": -0.2, "swing": -0.25,
-               "climb": -0.2, "hang": -0.05, "reach": -0.2, "carry": -0.1, "stretch": 0.05,
+               "climb": -0.2, "hang": -0.05, "stretch": 0.05,
                "idle": 0.03, "read": 0.06, "snore": 0.15, "desk_sleep_r": 0.2, "bed_sleep_r": 0.25}
 
 LINES = {
@@ -69,12 +69,6 @@ LINES = {
     "climb_top": ["這裡視野不錯。", "……好高。", "（往下看）"],
     "climb_jump": ["嘿！", "……跳了。"],
     "climb_down": ["到了。", "下來了。"],
-    "chase_start": ["……那個箭頭。", "別動。", "盯——"],
-    "chase_high": ["太高了……", "……下來一點。"],
-    "chase_miss": ["……沒抓到。", "下次一定。"],
-    "chase_got": ["抓到了！", "哼哼，抓到了。"],
-    "chase_escape": ["哇——被甩掉了！", "……甩得太用力了。"],
-    "chase_return": ["玩夠了，放手。", "好，還給你。"],
 }
 
 # 禮物：照《鳴潮》千咲的角色資料（喜歡手工、剪裁、計算、巧克力棒，覺得比草莓口味好吃；討厭辣的食物）
@@ -144,17 +138,16 @@ STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看
                "desk_sleep_r": "趴在桌上午睡", "bed_sleep_r": "睡覺", "headpat": "被摸頭（當機中）",
                "shy_pole": "躲在電線桿後面", "guard": "防備", "shy": "害羞", "gift": "收禮物",
                "sleepy": "睡眼惺忪", "held": "被拎起來", "fall": "往下掉", "land": "落地",
-               "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰",
-               "reach": "跳起來抓游標", "carry": "吊在你的游標上"}
+               "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰"}
 REACTIONS = ("shy_pole", "guard", "shy")
 
 # ===== 轉換動作：依「前一個動作的姿勢 → 下一個動作的姿勢」自動插入 =====
-POSTURE = {"walk": "side", "run": "side", "carry": "side",
+POSTURE = {"walk": "side", "run": "side",
            "walk_weapon": "weapon", "run_weapon": "weapon", "swing": "weapon",
            "read": "book", "desk_sleep_r": "desk", "bed_sleep_r": "bed", "snore": "doze",
            "climb": "wall", "hang": "wall"}
 TRANS_CLIPS = {"turn", "turn_back", "draw_weapon", "sheath", "book_open", "book_close", "desk_in", "desk_out",
-               "bed_in", "bed_out", "wall_jump", "wall_land", "crouch", "jolt", "relax"}
+               "bed_in", "bed_out", "wall_jump", "wall_land", "jolt", "relax"}
 TO_FRONT = {"side": ["turn_back"], "weapon": ["sheath", "turn_back"], "book": ["book_close"],
             "desk": ["desk_out"], "bed": ["bed_out"], "doze": ["jolt"], "wall": ["wall_land", "turn_back"]}
 FROM_FRONT = {"side": ["turn"], "weapon": ["turn", "draw_weapon"], "book": ["book_open"],
@@ -173,7 +166,7 @@ def posture(name):
 
 
 def transition_clips(a, b):
-    if b in TRANS_CLIPS and b != "crouch":
+    if b in TRANS_CLIPS:
         return []
     pa, pb = posture(a), posture(b)
     pre = ["relax"] if a == "headpat" and b != "headpat" else []
@@ -188,8 +181,8 @@ def transition_clips(a, b):
     if pa == "doze" and pb in ("desk", "bed"):
         return FROM_FRONT[pb][:]
     return pre + TO_FRONT.get(pa, []) + FROM_FRONT.get(pb, [])
-FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "reach",
-              "book_open", "book_close", "desk_in", "desk_out", "bed_in", "bed_out", "crouch", "jolt", "relax"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
+FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch",
+              "book_open", "book_close", "desk_in", "desk_out", "bed_in", "bed_out", "jolt", "relax"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
 
 def pick(key):
@@ -227,7 +220,7 @@ class Stats:
         self.last_seen = time.time()
         self.gift_log = {}           # 每種禮物送過幾次
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
-                         "sit_min": 50, "chime": True, "climb": True, "chase": True, "stay": False}
+                         "sit_min": 50, "chime": True, "climb": True, "stay": False}
 
     def load(self):
         try:
@@ -561,9 +554,7 @@ class Pet(QWidget):
         self.stat_save_t = time.time()
         self.on_arrive = None                  # 走到目標後要做的事（爬牆、追游標）
         self.climb_phase, self.climb_top = None, 0.0
-        self.chase_tries, self.caught = 0, False
         self.trans, self.pending_line = None, None
-        self.carry_t, self.carry_until, self.cur_last, self.cur_speed = 0.0, 0.0, None, 0.0
         now = time.time()                      # 久坐提醒：滑鼠一直在動的時間
         self.last_cursor, self.last_move, self.sit_start, self.next_sit = QCursor.pos(), now, now, 0.0
         self.sit_reminded = False
@@ -730,8 +721,6 @@ class Pet(QWidget):
         st = s.settings
         if st.get("climb", True) and s.energy >= 40:
             pool["climb"] = 1
-        if st.get("chase", True) and s.energy >= 30:
-            pool["chase"] = 1
         if st.get("stay", False):                # 待在原地：不走不跑、不爬牆不追游標，多半發呆
             pool = {"idle": 6, "read": 2, "swing": 1}
             if is_pre_sleep(m) or s.energy < 25:
@@ -746,10 +735,6 @@ class Pet(QWidget):
         g = self.screen_geo()
         if a == "climb":
             self.start_climb(); return
-        if a == "chase":
-            self.chase_tries = 0
-            self.say(pick("chase_start"))
-            self.start_chase(); return
         if a in ("walk", "run", "walk_weapon", "run_weapon"):
             name = a
             hw = self.half_w(name)
@@ -781,7 +766,7 @@ class Pet(QWidget):
     def react(self, steps):
         """steps：[(動畫, 輪數, 說的話), ...] 依序播。"""
         self.mode = "react"
-        self.on_arrive, self.caught, self.speed = None, False, 0
+        self.on_arrive, self.speed = None, 0
         self.react_clicks = 0
         self.queue = list(steps)
         self.next_in_queue()
@@ -802,8 +787,6 @@ class Pet(QWidget):
                 final, self.trans = self.trans[1], None
                 self._start(*final); return
             self.trans = None
-        if self.mode == "prep":
-            self.launch_jump(); return
         if self.mode == "climb":
             self.climb_next(); return
         if self.mode == "react" and self.queue:
@@ -822,7 +805,7 @@ class Pet(QWidget):
 
     # ---------- 互動 ----------
     def busy(self):
-        if self.mode in ("climb", "jump", "carry", "fall", "held", "prep"):
+        if self.mode in ("climb", "fall", "held"):
             self.say(pick("busy"))
             return True
         return False
@@ -895,7 +878,7 @@ class Pet(QWidget):
             self.input_happened()
             was_sleep = self.mode == "sleep"
             self.mode = "held"
-            self.on_arrive, self.caught, self.trans = None, False, None
+            self.on_arrive, self.trans = None, None
             self.queue.clear()
             self.facing_left = False
             self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "held", 0, 0.0, 0, 0
@@ -955,12 +938,6 @@ class Pet(QWidget):
             return
         if self.mode == "climb":
             self.tick_climb(dt, g, floor)
-            return
-        if self.mode == "jump":
-            self.tick_jump(dt, floor)
-            return
-        if self.mode == "carry":
-            self.tick_carry(dt, floor)
             return
         if abs(self.bottom - floor) > 0.5:     # 工作列或螢幕大小變了
             self.bottom = floor
@@ -1085,120 +1062,6 @@ class Pet(QWidget):
             self.anim_name, self.frame, self.frame_t, self.loops_left = "climb", 0, 0.0, 0
         self.redraw()
 
-    # ---------- 追游標 ----------
-    def start_chase(self):
-        c = QCursor.pos()
-        g = self.screen_geo()
-        if not g.contains(c):
-            self.pick_next(); return
-        hw = self.half_w("run")
-        tx = max(g.left() + hw, min(g.right() + 1 - hw, c.x()))
-        self.chase_tries += 1
-        if abs(tx - self.cx) < 6 * self.scale:
-            self.chase_jump(); return
-        self.on_arrive = self.chase_jump
-        self.play("run", 0, 30 * self.scale, target=tx)
-
-    def chase_jump(self):
-        c = QCursor.pos()
-        floor = self.screen_geo().bottom() + 1
-        if abs(c.x() - self.cx) > 14 * self.scale and self.chase_tries < 3:   # 游標跑了，再追
-            self.start_chase(); return
-        reach = 22 * self.scale                           # 雙手張開往上撲時，抓得到的高度（離腳底）
-        need = (floor - c.y()) - reach
-        if need > 26 * self.scale:                        # 跳不到
-            self.mode = "normal"
-            self.play("idle", 2)
-            self.say(pick("chase_high")); return
-        self.mode = "prep"                              # 先轉正、蹲低蓄力，播完再跳（anim_done → launch_jump）
-        self.play("crouch", 1)
-
-    def launch_jump(self):
-        c = QCursor.pos()
-        floor = self.screen_geo().bottom() + 1
-        need = (floor - c.y()) - 22 * self.scale
-        if need > 26 * self.scale:
-            self.mode = "normal"
-            self.play("idle", 2)
-            self.say(pick("chase_high")); return
-        self.mode = "jump"
-        self.facing_left = False
-        self.trans = None
-        self.vy = -(2 * 2600 * max(need + 3 * self.scale, 6 * self.scale)) ** 0.5
-        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "reach", 0, 0.0, 0, 0
-        self.caught = False
-        self.redraw()
-
-    def tick_jump(self, dt, floor):
-        self.vy += 2600 * dt
-        self.bottom = min(floor, self.bottom + self.vy * dt)
-        c = QCursor.pos()
-        sc = self.scale
-        if (not self.caught and abs(c.x() - self.cx) < 15 * sc
-                and self.bottom - 30 * sc <= c.y() <= self.bottom - 14 * sc):
-            self.caught = True
-            self.say(pick("chase_got"))
-            self.start_carry()
-            return
-        if self.bottom >= floor:
-            self.bottom = floor
-            self.mode = "react"
-            self.queue = []
-            self.play("idle", 2)
-            self.say(pick("chase_miss"))
-            return
-        self.advance_frame(dt)
-        self.redraw()
-
-    # ---------- 抓到游標：吊在游標上，游標帶著她走 ----------
-    def start_carry(self):
-        c = QCursor.pos()
-        self.mode = "carry"
-        self.facing_left = c.x() < self.cx
-        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "carry", 0, 0.0, 0, 0
-        self.on_arrive = None
-        self.carry_t, self.carry_until = 0.0, random.uniform(4, 9)
-        self.cur_last, self.cur_speed = c, 0.0
-        self.follow_cursor(c)
-        self.redraw()
-
-    def follow_cursor(self, c):
-        """把她放到「手剛好抓著游標尖端」的位置。"""
-        m, sc = self.meta("carry"), self.scale
-        hx, hy = m.get("hand", (28, 17))
-        dx = (hx + 0.5 - m["w"] / 2) * sc
-        self.cx = c.x() + (dx if self.facing_left else -dx)
-        top = c.y() - (hy + m.get("pad_top", 0) + 0.5) * sc
-        self.bottom = top + m["h"] * sc
-
-    def tick_carry(self, dt, floor):
-        c = QCursor.pos()
-        d = ((c.x() - self.cur_last.x()) ** 2 + (c.y() - self.cur_last.y()) ** 2) ** 0.5
-        self.cur_last = c
-        self.cur_speed = self.cur_speed * 0.6 + (d / max(dt, 1e-3)) * 0.4
-        self.carry_t += dt
-        self.follow_cursor(c)
-        if self.bottom >= floor:                          # 游標帶她碰到地面：自己放手站好
-            self.bottom = floor
-            self.mode = "react"; self.queue = []
-            self.facing_left = False
-            self.play("idle", 2)
-            self.say(pick("chase_return"))
-            self.redraw(); return
-        if self.cur_speed > 2500 * self.scale / 4:          # 甩太用力：被甩掉
-            self.let_go(pick("chase_escape")); return
-        if self.carry_t >= self.carry_until:              # 玩夠了，自己放手
-            self.let_go(pick("chase_return")); return
-        self.advance_frame(dt)
-        self.redraw()
-
-    def let_go(self, line):
-        self.mode, self.vy = "fall", 0.0
-        self.facing_left = False
-        self.anim_name, self.frame, self.frame_t = "fall", 0, 0.0
-        self.say(line)
-        self.redraw()
-
     # ---------- 久坐提醒、整點報時 ----------
     def check_sitting(self, now):
         cur = QCursor.pos()
@@ -1272,8 +1135,7 @@ class Pet(QWidget):
                                ("照時間作息（午睡、晚上睡覺）", "schedule", self.set_schedule),
                                ("偶爾自言自語", "chat", None),
                                ("整點報時", "chime", None),
-                               ("會爬螢幕邊緣", "climb", None),
-                               ("會追滑鼠游標", "chase", None)):
+                               ("會爬螢幕邊緣", "climb", None)):
             a = QAction(label, st, checkable=True, checked=bool(self.stats.settings.get(key, True)))
             a.triggered.connect(lambda on, key=key, fn=fn: (self.stats.settings.__setitem__(key, on), fn and fn(on)))
             st.addAction(a)

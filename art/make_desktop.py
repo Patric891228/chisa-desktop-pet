@@ -300,7 +300,7 @@ if __name__ == "__main__":
     os.makedirs(out, exist_ok=True)
     meta = {}
     for name, fn in (("held", held), ("fall", fall), ("land", land), ("peek", peek),
-                     ("climb", climb), ("hang", hang), ("stretch", stretch), ("reach", reach), ("carry", carry)):
+                     ("climb", climb), ("hang", hang), ("stretch", stretch)):
         fr = fn()
         strip = Image.new("RGBA", (32 * len(fr), 32))
         for i, f in enumerate(fr):
@@ -309,6 +309,5 @@ if __name__ == "__main__":
         meta[name] = {"w": 32, "h": 32, "frames": len(fr), "ms": MS[name]}
         assert len(MS[name]) == len(fr), name
     meta["peek"]["hidden_frame"] = PEEK_HIDDEN
-    meta["carry"]["hand"] = list(CARRY_HAND["xy"])      # 抓游標的手在圖上的位置（1 倍、還沒加上方留白）
     json.dump(meta, open(os.path.join(out, "anims_desktop.json"), "w"), indent=1)
     print("ok", {k: v["frames"] for k, v in meta.items()})
