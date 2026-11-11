@@ -35,7 +35,9 @@
   "back": [],
   "pin_go": [],
   "passthrough_on": [],
-  "passthrough_off": []
+  "passthrough_off": [],
+  "pat@high": [],
+  "pat@low": []
  },
  "chime_extra": {
   "12": "吃飯時間到了。"
@@ -94,5 +96,12 @@
   ]
  },
  "extra_anims": {},
- "notes": "欄位說明見 docs/CHARACTER_GUIDE.md。空的台詞清單就是不說話。"
+ "notes": "欄位說明見 docs/CHARACTER_GUIDE.md。空的台詞清單就是不說話。",
+ "action_line_chance": 0.3,
+ "action_lines": {
+  "read": [
+   "這本書還不錯。"
+  ],
+  "walk": []
+ }
 }

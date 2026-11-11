@@ -174,8 +174,27 @@ LOOPS = {"idle": (3, 6), "read": (6, 11), "snore": (3, 6), "desk_sleep_r": (4, 8
 LOOPS.update({n: tuple(e["loops"]) for n, e in EXTRA.items() if e.get("loops")})   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
 
+ACTION_LINES = CHAR.get("action_lines", {})          # 開始某個動作時偶爾說一句：{"read": [...], ...}
+ACTION_LINE_CHANCE = float(CHAR.get("action_line_chance", 0.3))
+AFF_HIGH, AFF_LOW = 70, 30
+MOOD = {"affection": START_AFFECTION}                  # Pet 會更新；pick() 依好感挑台詞
+
+
 def pick(key):
+    """台詞：好感高（>=70）時優先從 key@high 挑、低（<30）時從 key@low 挑，沒有就用 key。"""
+    a = MOOD["affection"]
+    tier = "@high" if a >= AFF_HIGH else "@low" if a < AFF_LOW else None
+    if tier and LINES.get(key + tier) and (not LINES.get(key) or random.random() < 0.7):
+        return random.choice(LINES[key + tier])
     return random.choice(LINES[key]) if LINES.get(key) else None
+
+
+def pick_action(name):
+    """動作台詞，同樣支援 @high / @low。"""
+    a = MOOD["affection"]
+    tier = "@high" if a >= AFF_HIGH else "@low" if a < AFF_LOW else None
+    pool = (tier and ACTION_LINES.get(name + tier)) or ACTION_LINES.get(name)
+    return random.choice(pool) if pool else None
 
 
 def minute_of_day():
@@ -242,6 +261,7 @@ class Stats:
 
     def add_affection(self, n):
         self.affection = max(0, min(100, self.affection + n))
+        MOOD["affection"] = self.affection
 
     def touched(self):
         self.neglect = 0.0
@@ -582,6 +602,7 @@ class Pet(QWidget):
         self.setAttribute(Qt.WA_MacAlwaysShowToolWindow)   # macOS：切到別的程式時不要消失
         self.setMouseTracking(True)
         self.stats = Stats(); self.stats.load()
+        MOOD["affection"] = self.stats.affection
         self.sprites = Sprites()
         self.bubble = Bubble(self.bubble_changed)
         self.sprite_rect = QRect()
@@ -810,6 +831,8 @@ class Pet(QWidget):
         self.last_action = a
         if s.energy < 25 and a in ("snore", "desk_sleep_r") and random.random() < 0.5:
             self.say(pick("tired"))
+        elif st.get("chat", True) and random.random() < ACTION_LINE_CHANCE:
+            self.say(pick_action(a), ambient=True)
 
         g = self.screen_geo()
         if a == "climb":
@@ -839,7 +862,10 @@ class Pet(QWidget):
         self.facing_left = False
         self.queue.clear()
         want = "desk_sleep_r" if is_nap(minute_of_day()) else "bed_sleep_r"
-        self.play(want if self.has(want) else "snore", 0)
+        want = want if self.has(want) else "snore"
+        self.play(want, 0)
+        if self.stats.settings.get("chat", True) and random.random() < 0.5:
+            self.say(pick_action(want), ambient=True)
 
     def react(self, steps):
         """steps：[(動畫, 輪數, 說的話), ...] 依序播。"""
@@ -1181,46 +1207,47 @@ class Pet(QWidget):
 
     # ---------- 選單、托盤 ----------
     def build_menu(self, menu):
+        """選單：互動／送禮／狀態／行事曆／隱藏（呼叫）／設定／離開。"""
+        if self.mode in ("hidden", "fading"):
+            menu.addAction("呼叫", lambda _=False: self.come_back())
+            menu.addAction("行事曆", self.show_calendar)
+            menu.addSeparator()
+            menu.addAction("離開", self.quit)
+            return
+        if self.stats.settings.get("passthrough"):
+            menu.addAction("取消滑鼠穿透", lambda _=False: self.set_passthrough(False))
+            menu.addSeparator()
         sleeping = self.mode == "sleep"
-        menu.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
-        gm = menu.addMenu(f"送禮（剩 {self.stats.gift_stock} 個）")
-        if self.stats.gift_stock == 0:
-            info = gm.addAction(f"禮物送完了，{fmt_hours(self.stats.gift_eta() / TIME_SCALE)} 後補一個")
-            info.setEnabled(False)
+        im = menu.addMenu("互動")
+        im.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
+        gm = menu.addMenu("送禮")
+        info = gm.addAction(f"剩 {self.stats.gift_stock} 個" if self.stats.gift_stock else
+                            f"禮物送完了，{fmt_hours(self.stats.gift_eta() / TIME_SCALE)} 後補一個")
+        info.setEnabled(False)
+        gm.addSeparator()
         for gid, gift in GIFTS.items():
             known = self.stats.gift_log.get(gid, 0) > 0
             label = f"{gift['name']}　{PREF_TEXT[gift['pref']] if known else '？'}"
             a = gm.addAction(QIcon(QPixmap.fromImage(gift_icon(gid).scaled(24, 24))), label)
             a.triggered.connect(lambda _=False, gid=gid: self.do_gift(gid))
             a.setEnabled(self.stats.gift_stock > 0)
-        if self.mode in ("hidden", "fading"):
-            menu.clear()
-            menu.addAction("叫她出來", lambda _=False: self.come_back())
-            menu.addAction("今日行事曆…", self.show_calendar)
-            menu.addSeparator()
-            menu.addAction("離開", self.quit)
-            return
-        if self.stats.settings.get("passthrough"):
-            menu.addAction("取消滑鼠穿透（可以再點她）", lambda _=False: self.set_passthrough(False))
-            menu.addSeparator()
-        menu.addAction("看她的狀態", self.show_panel)
+        menu.addAction("狀態", self.show_panel)
         n = len(self.today_events())
-        menu.addAction(f"今日行事曆…（{n} 件）" if n else "今日行事曆…", self.show_calendar)
-        hm = menu.addMenu("暫時躲起來")
-        for label, mins in (("10 分鐘", 10), ("30 分鐘", 30), ("1 小時", 60), ("直到我叫她", None)):
+        menu.addAction(f"行事曆（今天 {n} 件）" if n else "行事曆", self.show_calendar)
+        hm = menu.addMenu("隱藏")
+        for label, mins in (("躲 10 分鐘", 10), ("躲 30 分鐘", 30), ("躲 1 小時", 60), ("躲到我叫她", None)):
             hm.addAction(label, lambda _=False, m=mins: self.start_hide(m))
-        if self.tray is None:
-            info = hm.addAction("（找不到通知欄圖示時，重新開一次程式也能叫她回來）")
-            info.setEnabled(False)
+        hm.addSeparator()
+        if self.stats.settings.get("passthrough"):
+            hm.addAction("取消滑鼠穿透", lambda _=False: self.set_passthrough(False))
+        elif self.tray is not None:
+            hm.addAction("滑鼠穿透（看得到、點不到）", lambda _=False: self.set_passthrough(True))
         else:
-            info = hm.addAction("（從通知欄的圖示叫她回來）")
-            info.setEnabled(False)
-        if not self.stats.settings.get("passthrough"):
-            if self.tray is not None:
-                menu.addAction("滑鼠穿透（防誤觸，從通知欄取消）", lambda _=False: self.set_passthrough(True))
-            else:
-                a = menu.addAction("滑鼠穿透（找不到通知欄，無法使用）")
-                a.setEnabled(False)
+            a = hm.addAction("滑鼠穿透（找不到通知欄，無法使用）")
+            a.setEnabled(False)
+        info = hm.addAction("（從通知欄的圖示呼叫她、取消穿透）" if self.tray is not None
+                            else "（找不到通知欄時，重新開一次程式也能叫她回來）")
+        info.setEnabled(False)
         menu.addSeparator()
         st = menu.addMenu("設定")
         size = st.addMenu("大小")

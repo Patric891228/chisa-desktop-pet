@@ -125,6 +125,10 @@ characters/
 | `pat_reactions` | 摸頭後隨機接的反應動作，例如 `["shy", "guard"]` |
 | `gift_reactions` | 依喜好（love / like / normal / dislike）播的動作，`[["gift", 2], ["shy", 1]]` 是 [動作, 播幾次] |
 | `extra_anims` | 專屬動作 |
+| `action_lines` | 動作台詞：她自己開始某個動作時偶爾說一句，`{"read": ["這本書還不錯。"]}`（上床、趴桌也算） |
+| `action_line_chance` | 動作台詞出現機率，預設 0.3 |
+
+**好感分級**：任何台詞 key（含 action_lines）都可以另外寫 `<key>@high`（好感 70 以上，約七成機率優先用）和 `<key>@low`（好感 30 以下），例如 `pat@high`。沒寫就用一般的。
 
 ### 台詞 key
 
