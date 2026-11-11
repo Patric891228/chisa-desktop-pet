@@ -17,7 +17,9 @@ from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtGui import (QRegion, QPixmap, QPainter, QTransform, QColor, QFont, QFontMetrics, QCursor,
                            QIcon, QAction, QActionGroup)
 from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon, QLabel, QProgressBar,
-                               QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout)
+                               QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout, QListWidget, QTimeEdit,
+                               QLineEdit)
+from PySide6.QtCore import QPropertyAnimation, QTime
 
 __version__ = "0.1.2"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
@@ -67,6 +69,9 @@ LINES = {
     "sit_back": ["歡迎回來。", "休息夠了嗎？"],
     "busy": ["等一下，我在忙。", "現在不行……！"],
     "climb_top": ["這裡視野不錯。", "……好高。", "（往下看）"],
+    "hide": ["我先躲一下，有事再叫我。", "待會見！", "休息一下～"],
+    "back": ["回來了。", "……有叫我嗎？", "我回來了。"],
+    "pin_go": ["好，我待在這裡。", "這裡嗎？好。"],
     "climb_jump": ["嘿！", "……跳了。"],
     "climb_down": ["到了。", "下來了。"],
 }
@@ -137,7 +142,7 @@ STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看
                "swing": "練剪刀", "walk_weapon": "扛著剪刀散步", "run_weapon": "扛著剪刀跑步",
                "desk_sleep_r": "趴在桌上午睡", "bed_sleep_r": "睡覺", "headpat": "被摸頭（當機中）",
                "shy_pole": "躲在電線桿後面", "guard": "防備", "shy": "害羞", "gift": "收禮物",
-               "sleepy": "睡眼惺忪", "held": "被拎起來", "fall": "往下掉", "land": "落地",
+               "sleepy": "睡眼惺忪", "peace": "比耶", "jolt": "嚇一跳", "held": "被拎起來", "fall": "往下掉", "land": "落地",
                "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰"}
 REACTIONS = ("shy_pole", "guard", "shy")
 
@@ -219,6 +224,7 @@ class Stats:
         self.first_day = date.today().isoformat()
         self.last_seen = time.time()
         self.gift_log = {}           # 每種禮物送過幾次
+        self.events = {}             # 今日行事曆：{"2026-11-11": [{"t": "15:30", "text": "開會"}, ...]}
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
                          "sit_min": 50, "chime": True, "climb": True, "stay": False}
 
@@ -232,6 +238,8 @@ class Stats:
                 self.settings.update(v)
             elif hasattr(self, k):
                 setattr(self, k, v)
+        today = date.today().isoformat()
+        self.events = {d: ev for d, ev in self.events.items() if d >= today and ev}   # 過去的行程不留
         # 關掉期間經過的時間：禮物照常恢復；冷落最多算 24 小時；離開超過 1 小時就睡飽了
         away = max(0.0, time.time() - self.last_seen) * TIME_SCALE
         self.tick(away, awake=False)
@@ -426,12 +434,12 @@ class Bubble:
         self.on_change = on_change
         self.hide_timer = QTimer(singleShot=True, timeout=self.hide)
 
-    def say(self, text, style="paper", zoom=2, icon=None):
+    def say(self, text, style="paper", zoom=2, icon=None, hold_ms=None):
         img = render_bubble(text, style, icon=icon)
         self.pix = QPixmap.fromImage(img.scaled(img.width() * zoom, img.height() * zoom,
                                                 Qt.IgnoreAspectRatio, Qt.FastTransformation))
         self.mask = self.pix.mask()
-        self.hide_timer.start(int(2200 + 120 * len(text)))
+        self.hide_timer.start(int(hold_ms or (2200 + 120 * len(text))))
         self.on_change()
 
     def hide(self):
@@ -513,6 +521,70 @@ class StatusPanel(QWidget):
         self.days.setText(f"第 {d} 天")
 
 
+# ===== 今日行事曆（試做） =====
+class CalendarDialog(QWidget):
+    def __init__(self, pet):
+        super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
+        self.pet = pet
+        self.setWindowTitle("今日行事曆")
+        self.setStyleSheet("QWidget{background:#181a26;color:#fff0e6;font-size:13px} "
+                           "QListWidget,QLineEdit,QTimeEdit{background:#26242c;border:1px solid #646092;padding:3px}"
+                           "QListWidget::item:selected{background:#f0343c}"
+                           "QPushButton{background:#2e2a48;border:1px solid #646092;padding:5px 10px;border-radius:4px}"
+                           "QPushButton:hover{background:#464068}")
+        L = QVBoxLayout(self)
+        self.title = QLabel(); self.title.setStyleSheet("font-size:18px;color:#deb240")
+        L.addWidget(self.title)
+        hint = QLabel("時間到前 10 分鐘和準時，她都會提醒你。"); hint.setStyleSheet("color:#9a96c0")
+        L.addWidget(hint)
+        self.list = QListWidget(); L.addWidget(self.list)
+        row = QHBoxLayout()
+        self.time = QTimeEdit(); self.time.setDisplayFormat("HH:mm")
+        self.text = QLineEdit(); self.text.setPlaceholderText("要做什麼？例如：開會")
+        self.text.returnPressed.connect(self.add)
+        add = QPushButton("新增"); add.clicked.connect(self.add)
+        row.addWidget(self.time); row.addWidget(self.text, 1); row.addWidget(add)
+        L.addLayout(row)
+        rm = QPushButton("刪除選取的行程"); rm.clicked.connect(self.remove)
+        L.addWidget(rm)
+        self.setFixedWidth(360)
+
+    def showEvent(self, e):
+        now = datetime.now()
+        wd = "一二三四五六日"[now.weekday()]
+        self.title.setText(f"{now.month}/{now.day}（{wd}）的行程")
+        nxt = (now.hour * 60 + now.minute + 30) // 30 * 30     # 預設下一個整點或半點
+        self.time.setTime(QTime(min(23, nxt // 60), nxt % 60 if nxt < 24 * 60 else 59))
+        self.refresh(); super().showEvent(e)
+
+    def refresh(self):
+        self.list.clear()
+        evs = self.pet.today_events()
+        for e in evs:
+            self.list.addItem(f"{e['t']}　{e['text']}")
+        if not evs:
+            self.list.addItem("（今天還沒有行程）")
+
+    def add(self):
+        text = self.text.text().strip()
+        if not text:
+            return
+        today = date.today().isoformat()
+        self.pet.stats.events.setdefault(today, []).append({"t": self.time.time().toString("HH:mm"), "text": text})
+        self.pet.stats.save()
+        self.text.clear()
+        self.refresh()
+        self.pet.say(f"記下來了：{self.time.time().toString('HH:mm')} {text}")
+
+    def remove(self):
+        i = self.list.currentRow()
+        evs = self.pet.today_events()
+        if 0 <= i < len(evs):
+            self.pet.stats.events[date.today().isoformat()].remove(evs[i])
+            self.pet.stats.save()
+            self.refresh()
+
+
 # ===== 寵物本體 =====
 class Pet(QWidget):
     TICK_MS = 33
@@ -592,12 +664,14 @@ class Pet(QWidget):
             QTimer.singleShot(400, lambda: self.say(line))     # 上一句消失後隔一下再說
         self.redraw()
 
-    def say(self, text, icon=None, ambient=False):
+    def say(self, text, icon=None, ambient=False, hold_ms=None):
         if text and ambient and self.bubble.isVisible():   # 閒聊、報時：等這句講完再說，不打斷
             self.pending_line = text
             return
         if text:
-            self.bubble.say(text, self.stats.settings.get("bubble", "paper"), max(1, self.scale // 2), icon)
+            if self.mode in ("hidden", "fading"):
+                return
+            self.bubble.say(text, self.stats.settings.get("bubble", "paper"), max(1, self.scale // 2), icon, hold_ms)
 
     def is_sleep_time(self):
         m = minute_of_day()
@@ -721,11 +795,15 @@ class Pet(QWidget):
         st = s.settings
         if st.get("climb", True) and s.energy >= 40:
             pool["climb"] = 1
-        if st.get("stay", False):                # 待在原地：不走不跑、不爬牆不追游標，多半發呆
+        px_pin = self.pin_x()
+        if px_pin is not None and abs(self.cx - px_pin) > 3 * self.scale:   # 固定位置：被拖走了就走回去
+            self.play("walk", 0, 9 * self.scale, target=px_pin)
+            return
+        if st.get("stay", False) or px_pin is not None:   # 待在原地／固定位置：不走不跑、不爬牆，多半發呆
             pool = {"idle": 6, "read": 2, "swing": 1}
             if is_pre_sleep(m) or s.energy < 25:
                 pool["snore"] = 3
-        if self.last_action in pool and len(pool) > 1 and not st.get("stay", False):
+        if self.last_action in pool and len(pool) > 1 and not st.get("stay", False) and px_pin is None:
             pool.pop(self.last_action)
         a = random.choices(list(pool), weights=list(pool.values()))[0]
         self.last_action = a
@@ -752,7 +830,7 @@ class Pet(QWidget):
             loops = {"idle": (3, 6), "read": (6, 11), "snore": (3, 6), "swing": (2, 4), "desk_sleep_r": (4, 8),
                      "peek": (1, 1)}[a]
             self.facing_left = False if a in ("read", "desk_sleep_r") else self.facing_left
-            if self.stats.settings.get("stay", False) and a == "idle":
+            if (self.stats.settings.get("stay", False) or self.pin_x() is not None) and a == "idle":
                 loops = (8, 16)                    # 待在原地時，發呆久一點，動作少一點
             self.play(a, random.randint(*loops))
 
@@ -787,6 +865,8 @@ class Pet(QWidget):
                 final, self.trans = self.trans[1], None
                 self._start(*final); return
             self.trans = None
+        if self.mode == "hiding":
+            self.fade_out(); return
         if self.mode == "climb":
             self.climb_next(); return
         if self.mode == "react" and self.queue:
@@ -805,7 +885,7 @@ class Pet(QWidget):
 
     # ---------- 互動 ----------
     def busy(self):
-        if self.mode in ("climb", "fall", "held"):
+        if self.mode in ("climb", "fall", "held", "hiding", "fading", "hidden"):
             self.say(pick("busy"))
             return True
         return False
@@ -895,6 +975,8 @@ class Pet(QWidget):
             return
         self.press_pos = None
         if self.mode == "held":
+            if isinstance(self.stats.settings.get("pin"), (int, float)):
+                self.stats.settings["pin"] = int(self.cx)        # 固定在「這裡」：拖到哪就固定到哪
             self.mode = "fall"
             self.vy = 0.0
             self.anim_name, self.frame, self.frame_t = "fall", 0, 0.0
@@ -918,6 +1000,11 @@ class Pet(QWidget):
             s.settings["x"] = int(self.cx)
             s.save()
 
+        self.check_calendar()
+        if self.mode in ("hidden", "fading"):
+            if self.mode == "hidden" and self.hidden_until and now >= self.hidden_until:
+                self.come_back()
+            return
         g = self.screen_geo()
         floor = g.bottom() + 1
         self.check_sitting(now)
@@ -1087,7 +1174,7 @@ class Pet(QWidget):
         if minute_of_day() % 60 != 0 or h == self.last_chime:
             return
         self.last_chime = h
-        if not self.stats.settings.get("chime", True) or self.mode == "sleep":
+        if not self.stats.settings.get("chime", True) or self.mode in ("sleep", "hidden", "fading"):
             return
         self.say(chime_line(h), ambient=True)
 
@@ -1105,7 +1192,25 @@ class Pet(QWidget):
             a = gm.addAction(QIcon(QPixmap.fromImage(gift_icon(gid).scaled(24, 24))), label)
             a.triggered.connect(lambda _=False, gid=gid: self.do_gift(gid))
             a.setEnabled(self.stats.gift_stock > 0)
+        if self.mode in ("hidden", "fading"):
+            menu.clear()
+            menu.addAction("叫她出來", lambda _=False: self.come_back())
+            menu.addAction("今日行事曆…", self.show_calendar)
+            menu.addSeparator()
+            menu.addAction("離開", self.quit)
+            return
         menu.addAction("看她的狀態", self.show_panel)
+        n = len(self.today_events())
+        menu.addAction(f"今日行事曆…（{n} 件）" if n else "今日行事曆…", self.show_calendar)
+        hm = menu.addMenu("暫時躲起來")
+        for label, mins in (("10 分鐘", 10), ("30 分鐘", 30), ("1 小時", 60), ("直到我叫她", None)):
+            hm.addAction(label, lambda _=False, m=mins: self.start_hide(m))
+        if self.tray is None:
+            info = hm.addAction("（找不到通知欄圖示時，重新開一次程式也能叫她回來）")
+            info.setEnabled(False)
+        else:
+            info = hm.addAction("（從通知欄的圖示叫她回來）")
+            info.setEnabled(False)
         menu.addSeparator()
         st = menu.addMenu("設定")
         size = st.addMenu("大小")
@@ -1128,6 +1233,15 @@ class Pet(QWidget):
                         checked=int(self.stats.settings.get("sit_min", 50)) == m)
             a.triggered.connect(lambda _=False, m=m: self.stats.settings.__setitem__("sit_min", m))
             sgrp.addAction(a); sit.addAction(a)
+        pm = st.addMenu("固定位置")
+        pgrp = QActionGroup(pm)
+        cur = self.stats.settings.get("pin")
+        for label, val in (("不固定（自由走動）", None), ("螢幕左下角", "left"), ("螢幕右下角", "right"),
+                           ("固定在現在的位置", "here")):
+            checked = (cur == val) or (val == "here" and isinstance(cur, (int, float)))
+            a = QAction(label, pm, checkable=True, checked=checked)
+            a.triggered.connect(lambda _=False, v=val: self.set_pin(int(self.cx) if v == "here" else v))
+            pgrp.addAction(a); pm.addAction(a)
         a = QAction("待在原地（不走動）", st, checkable=True, checked=bool(self.stats.settings.get("stay", False)))
         a.triggered.connect(lambda on: self.set_stay(on))
         st.addAction(a)
@@ -1158,7 +1272,8 @@ class Pet(QWidget):
             self.tray_menu.aboutToShow.connect(lambda: (self.tray_menu.clear(), self.build_menu(self.tray_menu)))
             self.tray.setContextMenu(self.tray_menu)
             self.tray.setToolTip("Chisa 桌面寵物")
-            self.tray.activated.connect(lambda r: self.show_panel() if r == QSystemTrayIcon.Trigger else None)
+            self.tray.activated.connect(lambda r: (self.come_back() if self.mode in ("hidden", "fading") else self.show_panel())
+                                        if r == QSystemTrayIcon.Trigger else None)
             self.tray.show()
 
     def set_scale(self, k):
@@ -1180,6 +1295,124 @@ class Pet(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
         if not init:
             self.show()
+
+    # ---------- 固定位置 ----------
+    def pin_x(self):
+        pin = self.stats.settings.get("pin")
+        if pin is None:
+            return None
+        g = self.screen_geo()
+        hw = 18 * self.scale
+        if pin == "left":
+            return g.left() + hw
+        if pin == "right":
+            return g.right() + 1 - hw
+        return max(g.left() + hw, min(g.right() + 1 - hw, float(pin)))
+
+    def set_pin(self, pin):
+        self.stats.settings["pin"] = pin
+        self.stats.save()
+        if pin is None or self.mode != "normal":
+            return
+        self.speed, self.on_arrive = 0, None
+        self.say(pick("pin_go"))
+        tx = self.pin_x()
+        if abs(self.cx - tx) > 3 * self.scale:
+            self.play("walk", 0, 9 * self.scale, target=tx)
+        else:
+            self.play("idle", 3)
+
+    # ---------- 暫時躲起來 ----------
+    def start_hide(self, minutes):
+        if self.mode in ("hidden", "fading", "hiding"):
+            return
+        if self.busy():
+            return
+        self.hide_minutes = minutes
+        self.mode = "hiding"
+        self.queue.clear(); self.speed, self.on_arrive = 0, None
+        self.play("peace", 1)
+        self.say(pick("hide"))
+
+    def fade_out(self):
+        self.mode = "fading"
+        self.bubble.hide()
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(700); anim.setStartValue(1.0); anim.setEndValue(0.0)
+        anim.finished.connect(self.finish_hide)
+        self._fade = anim
+        anim.start()
+
+    def finish_hide(self):
+        self.hide()
+        self.setWindowOpacity(1.0)
+        self.mode = "hidden"
+        m = getattr(self, "hide_minutes", None)
+        self.hidden_until = time.time() + m * 60 if m else None
+
+    def come_back(self, line=None):
+        if self.mode not in ("hidden", "fading"):
+            return
+        if getattr(self, "_fade", None):
+            self._fade.stop()
+        self.mode = "normal"
+        self.hidden_until = None
+        self.bottom = self.screen_geo().bottom() + 1
+        self.trans = None
+        self._start("idle", 2)
+        self.setWindowOpacity(0.0)
+        self.show()
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(500); anim.setStartValue(0.0); anim.setEndValue(1.0)
+        self._fade = anim
+        anim.start()
+        self.say(line or pick("back"))
+
+    # ---------- 今日行事曆 ----------
+    def today_events(self):
+        ev = self.stats.events.get(date.today().isoformat(), [])
+        return sorted(ev, key=lambda e: e["t"])
+
+    def show_calendar(self):
+        if not hasattr(self, "calendar"):
+            self.calendar = CalendarDialog(self)
+        self.calendar.show(); self.calendar.raise_(); self.calendar.activateWindow()
+
+    def check_calendar(self):
+        """提前 10 分鐘、準時各提醒一次；每天第一次見面念今天的行程。"""
+        m = minute_of_day()
+        if m == getattr(self, "last_cal_min", None):
+            return
+        self.last_cal_min = m
+        today = date.today().isoformat()
+        evs = self.today_events()
+        fired = self.__dict__.setdefault("cal_fired", set())
+        for e in evs:
+            hh, mm = map(int, e["t"].split(":"))
+            t = hh * 60 + mm
+            for kind, at in (("soon", t - 10), ("now", t)):
+                key = (today, e["t"], e["text"], kind)
+                if m == at and key not in fired:
+                    fired.add(key)
+                    self.remind(e, kind)
+        if (evs and self.stats.settings.get("brief_day") != today and self.mode == "normal"):
+            self.stats.settings["brief_day"] = today
+            left = [e for e in evs if int(e["t"][:2]) * 60 + int(e["t"][3:]) >= m]
+            if left:
+                items = "、".join(f"{e['t']} {e['text']}" for e in left[:3]) + ("……" if len(left) > 3 else "")
+                self.say(f"今天還有 {len(left)} 件事：{items}", ambient=True, hold_ms=9000)
+
+    def remind(self, e, kind):
+        text = f"10 分鐘後：{e['text']}" if kind == "soon" else f"{e['t']} 了，{e['text']}！"
+        if self.mode in ("hidden", "fading"):
+            self.come_back(text); return
+        if self.mode in ("held", "fall", "climb"):
+            self.say(text, hold_ms=10000); return
+        if self.mode == "sleep":
+            self.react(self.wake_prefix() + [("jolt", 1, None)])
+        else:
+            self.react([("jolt", 1, None), ("idle", 2, None)])
+        self.say(text, hold_ms=10000)
 
     def set_stay(self, on):
         self.stats.settings["stay"] = on

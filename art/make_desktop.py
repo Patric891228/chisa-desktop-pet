@@ -278,7 +278,32 @@ def carry():
     return F
 
 
-MS = {"climb": [180] * 4, "hang": [400, 400, 600, 300], "stretch": [300, 400, 500, 500, 400, 400, 300],
+# ---------- 比耶：躲起來之前 ----------
+def v_sign(up=0):
+    """觀眾右邊的手舉到臉旁比 V（手臂短短的，不往上伸長）。"""
+    def f(g):
+        rect(g, 23, 16 - up, 27, 22, 1); rect(g, 24, 17 - up, 26, 21, 11)          # 袖子
+        rect(g, 25, 12 - up, 29, 17 - up, 1)                                        # 手外框
+        rect(g, 26, 14 - up, 28, 16 - up, 4)                                        # 拳頭
+        for fx_ in (26, 28):                                                        # 兩根手指
+            rect(g, fx_ - 0, 10 - up, fx_, 13 - up, 1)
+            px(g, fx_, 11 - up, 4); px(g, fx_, 12 - up, 4)
+        px(g, 27, 11 - up, 0); px(g, 27, 12 - up, 0)
+    return f
+
+
+def peace():
+    Fr = v6.front
+    out = [
+        Fr(eyes="open"),
+        Fr(eyes="wink", mouth="open", extra=v_sign(0), fx=v6.sparkle(30, 6)),
+        Fr(eyes="wink", mouth="open", dy=-1, blush=True, extra=v_sign(1), fx=lambda g: (v6.sparkle(30, 4)(g), v6.sparkle(2, 8)(g))),
+        Fr(eyes="wink", blush=True, extra=v_sign(0), fx=v6.sparkle(30, 6)),
+    ]
+    return [[[3 if c == 13 else c for c in row] for row in v7.half(f)] for f in out]
+
+
+MS = {"peace": [200, 260, 400, 700],"climb": [180] * 4, "hang": [400, 400, 600, 300], "stretch": [300, 400, 500, 500, 400, 400, 300],
       "reach": [120, 120], "carry": [220] * 4,
       "held": [160] * 4, "fall": [90] * 2, "land": [140, 140, 200, 300, 300, 300],
       "peek": [150, 120, 100, 100, 700, 250, 200, 400, 450, 450, 450, 450, 180, 900, 500, 150, 180, 160, 300]}
@@ -300,7 +325,7 @@ if __name__ == "__main__":
     os.makedirs(out, exist_ok=True)
     meta = {}
     for name, fn in (("held", held), ("fall", fall), ("land", land), ("peek", peek),
-                     ("climb", climb), ("hang", hang), ("stretch", stretch)):
+                     ("climb", climb), ("hang", hang), ("stretch", stretch), ("peace", peace)):
         fr = fn()
         strip = Image.new("RGBA", (32 * len(fr), 32))
         for i, f in enumerate(fr):

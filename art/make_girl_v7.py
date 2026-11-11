@@ -38,6 +38,12 @@ def head_front(g, hx, hy, eyes, mouth, look, blush=False):
             rect(g, e, ey + 1, e + 2, ey + 3, 6)
             rect(g, e, ey + 4, e + 2, ey + 4, 1)
             px(g, e + 1, ey + 2, 8)
+        elif eyes == "wink":     # 眨單眼：觀眾左邊睜開、右邊閉成 ^
+            if k == 0:
+                rect(g, e, ey, e + 2, ey, 1); rect(g, e, ey + 1, e + 2, ey + 1, 10)
+                rect(g, e, ey + 2, e + 2, ey + 4, 9); px(g, e, ey + 1, 6); px(g, e + 2, ey + 4, 10)
+            else:
+                px(g, e, ey + 4, 1); px(g, e + 1, ey + 3, 1); px(g, e + 2, ey + 4, 1)
         elif eyes == "disgust":  # 嫌棄：上眼皮壓很低、斜眼瞄過來
             rect(g, e, ey + 1, e + 2, ey + 2, 1)
             px(g, e + (0 if k == 0 else 2), ey + 1, 4)
