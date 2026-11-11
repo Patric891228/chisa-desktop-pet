@@ -1,10 +1,18 @@
-# 千咲-桌面寵物
+# Pixel Desktop Pet 像素桌寵
 
-住在你桌面的像素千咲：會散步、看書、午睡、扛著剪刀到處跑、爬螢幕邊緣、偷看你的螢幕，還會提醒你起來動一動。摸頭前請先提交申請書。
+住在你桌面的像素角色：會散步、看書、午睡、爬螢幕邊緣、偷看你的螢幕，還會提醒你起來動一動。
+程式本身是通用的，每個角色是 `characters/` 裡的一個角色包，換角色不用改程式。
 
-*A tiny pixel-art Chisa who lives on your desktop. Windows / macOS / Linux.*
+*A tiny pixel-art desktop pet engine with swappable character packs. Windows / macOS / Linux.*
 
-> **非官方同人作品。** Chisa 角色版權屬於原作，本專案與原作官方無關，請勿用於商業用途。
+| 角色 | 資料夾 | 說明 |
+| --- | --- | --- |
+| 千咲 | `characters/chisa/` | 鳴潮《Wuthering Waves》千咲的非官方同人角色。扛著剪刀到處跑，摸頭前請先提交申請書。 |
+| （範本） | `characters/_template/` | 開新角色用，見[新角色指南](docs/CHARACTER_GUIDE.md) |
+
+> **非官方同人作品。** 各角色版權屬於原作，本專案與原作官方無關，請勿用於商業用途。
+
+以下以千咲為例。
 
 ![動作預覽](docs/new_actions.gif) ![爬牆、伸懶腰、練剪刀、躲電線桿](docs/new_actions_v011.gif)
 
@@ -77,6 +85,8 @@ python desktop_pet.py
 ```
 
 ## 做其他角色
+
+裝了兩個以上的角色包時，右鍵 → 設定 → 角色 可以切換；也可以用 `PET_CHARACTER=<角色> ./run.sh` 指定。
 
 角色的圖、台詞、禮物和專屬動作都放在 `characters/<角色>/`，程式本身是共用的。
 從 `characters/_template/` 複製一份開始，用 `python3 tools/preview_anims.py characters/<角色>` 產生動畫審核頁逐個確認。

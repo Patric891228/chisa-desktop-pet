@@ -1514,7 +1514,7 @@ class Pet(QWidget):
 
 
 # ===== 開機自動啟動（Linux：autostart .desktop；Windows：登錄檔 Run；macOS：LaunchAgent）=====
-APP_ID = "chisa-desktop-pet"
+APP_ID = "chisa-desktop-pet"           # 舊名稱，保留讓開機自動啟動、存檔位置和舊版相容
 
 
 def launch_cmd():
