@@ -19,7 +19,7 @@ from PySide6.QtGui import (QRegion, QPixmap, QPainter, QTransform, QColor, QFont
 from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon, QLabel, QProgressBar,
                                QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout)
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(HERE, "assets")
@@ -147,7 +147,49 @@ STATUS_TEXT = {"idle": "發呆", "walk": "散步", "run": "跑步", "read": "看
                "peek": "偷看你的螢幕", "climb": "爬螢幕邊緣", "hang": "掛在螢幕邊緣", "stretch": "伸懶腰",
                "reach": "跳起來抓游標", "carry": "吊在你的游標上"}
 REACTIONS = ("shy_pole", "guard", "shy")
-FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "reach"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
+
+# ===== 轉換動作：依「前一個動作的姿勢 → 下一個動作的姿勢」自動插入 =====
+POSTURE = {"walk": "side", "run": "side", "carry": "side",
+           "walk_weapon": "weapon", "run_weapon": "weapon", "swing": "weapon",
+           "read": "book", "desk_sleep_r": "desk", "bed_sleep_r": "bed", "snore": "doze",
+           "climb": "wall", "hang": "wall"}
+TRANS_CLIPS = {"turn", "turn_back", "draw_weapon", "sheath", "book_open", "book_close", "desk_in", "desk_out",
+               "bed_in", "bed_out", "wall_jump", "wall_land", "crouch", "jolt", "relax"}
+TO_FRONT = {"side": ["turn_back"], "weapon": ["sheath", "turn_back"], "book": ["book_close"],
+            "desk": ["desk_out"], "bed": ["bed_out"], "doze": ["jolt"], "wall": ["wall_land", "turn_back"]}
+FROM_FRONT = {"side": ["turn"], "weapon": ["turn", "draw_weapon"], "book": ["book_open"],
+              "desk": ["desk_in"], "bed": ["bed_in"]}
+FACE_NEW = {"turn", "draw_weapon"}          # 這些轉換格用「新的」朝向播
+
+
+CLIP_END = {"turn": "side", "draw_weapon": "weapon", "sheath": "side", "book_open": "book",
+            "desk_in": "desk", "bed_in": "bed", "wall_jump": "wall", "wall_land": "side"}   # 其餘轉換格結束時是正面
+
+
+def posture(name):
+    if name in TRANS_CLIPS:
+        return CLIP_END.get(name, "front")
+    return POSTURE.get(name, "front")
+
+
+def transition_clips(a, b):
+    if b in TRANS_CLIPS and b != "crouch":
+        return []
+    pa, pb = posture(a), posture(b)
+    pre = ["relax"] if a == "headpat" and b != "headpat" else []
+    if pa == pb:
+        return pre
+    if pa == "side" and pb == "weapon":
+        return pre + ["draw_weapon"]
+    if pa == "weapon" and pb == "side":
+        return pre + ["sheath"]
+    if pa == "wall" and pb == "side":
+        return ["wall_land"]
+    if pa == "doze" and pb in ("desk", "bed"):
+        return FROM_FRONT[pb][:]
+    return pre + TO_FRONT.get(pa, []) + FROM_FRONT.get(pb, [])
+FRONT_ONLY = {"peek", "read", "desk_sleep_r", "bed_sleep_r", "held", "fall", "land", "stretch", "reach",
+              "book_open", "book_close", "desk_in", "desk_out", "bed_in", "bed_out", "crouch", "jolt", "relax"}   # 不水平翻轉的動作      # 摸頭之後隨機接一個
 
 
 def pick(key):
@@ -491,7 +533,7 @@ class Pet(QWidget):
         self.setMouseTracking(True)
         self.stats = Stats(); self.stats.load()
         self.sprites = Sprites()
-        self.bubble = Bubble(lambda: self.redraw() if hasattr(self, "pix") else None)
+        self.bubble = Bubble(self.bubble_changed)
         self.sprite_rect = QRect()
         self.bubble_rect = QRect()
         self.panel = StatusPanel(self)
@@ -520,6 +562,7 @@ class Pet(QWidget):
         self.on_arrive = None                  # 走到目標後要做的事（爬牆、追游標）
         self.climb_phase, self.climb_top = None, 0.0
         self.chase_tries, self.caught = 0, False
+        self.trans, self.pending_line = None, None
         self.carry_t, self.carry_until, self.cur_last, self.cur_speed = 0.0, 0.0, None, 0.0
         now = time.time()                      # 久坐提醒：滑鼠一直在動的時間
         self.last_cursor, self.last_move, self.sit_start, self.next_sit = QCursor.pos(), now, now, 0.0
@@ -550,7 +593,18 @@ class Pet(QWidget):
     def half_w(self, name=None):
         return self.meta(name)["w"] * self.scale / 2
 
-    def say(self, text, icon=None):
+    def bubble_changed(self):
+        if not hasattr(self, "pix"):
+            return
+        if not self.bubble.isVisible() and getattr(self, "pending_line", None):
+            line, self.pending_line = self.pending_line, None
+            QTimer.singleShot(400, lambda: self.say(line))     # 上一句消失後隔一下再說
+        self.redraw()
+
+    def say(self, text, icon=None, ambient=False):
+        if text and ambient and self.bubble.isVisible():   # 閒聊、報時：等這句講完再說，不打斷
+            self.pending_line = text
+            return
         if text:
             self.bubble.say(text, self.stats.settings.get("bubble", "paper"), max(1, self.scale // 2), icon)
 
@@ -568,8 +622,25 @@ class Pet(QWidget):
         self.stats.touched()
 
     # ---------- 播放 ----------
-    def play(self, name, loops=1, speed=0.0, target=None):
-        if name in FRONT_ONLY:
+    def play(self, name, loops=1, speed=0.0, target=None, smooth=True):
+        """播放動作；跟前一個動作姿勢不同時，先自動播轉換格（轉身、抽剪刀、拿書……）。"""
+        clips = transition_clips(self.anim_name, name) if smooth else []
+        if clips:
+            self.trans = (clips, (name, loops, speed, target))
+            self.next_clip()
+            return
+        self.trans = None
+        self._start(name, loops, speed, target)
+
+    def next_clip(self):
+        clips, (name, loops, speed, target) = self.trans
+        clip = clips.pop(0)
+        if clip in FACE_NEW and target is not None:
+            self.facing_left = target < self.cx
+        self._start(clip, 1)
+
+    def _start(self, name, loops=1, speed=0.0, target=None):
+        if name in FRONT_ONLY or (posture(name) == "front" and name not in TRANS_CLIPS):
             self.facing_left = False
         self.anim_name, self.frame, self.frame_t = name, 0, 0.0
         self.loops_left, self.speed = loops, speed
@@ -584,29 +655,38 @@ class Pet(QWidget):
     def frame_ms(self):
         return self.meta()["ms"][self.frame]
 
+    def window_box(self):
+        """視窗固定大小（夠放最大的對話框＋最寬的動作），之後只移動不縮放，對話框出現、換動作都不會閃。"""
+        sc, style = self.scale, self.stats.settings.get("bubble", "paper")
+        zoom = max(1, sc // 2)
+        key = (sc, style)
+        if getattr(self, "_box_key", None) != key:
+            img = render_bubble("她" * 60, style, icon=gift_icon("choco"))
+            self._box_key = key
+            self._box = (max(56 * sc, img.width() * zoom + 4 * sc), (35 - 3) * sc + img.height() * zoom)
+        return self._box
+
     def redraw(self):
         flip = self.facing_left
         pix, mask = self.sprites.frame(self.anim_name, self.frame, self.scale, flip)
         self.pix = pix
         sc = self.scale
-        S = QRect(int(round(self.cx - pix.width() / 2)), int(round(self.bottom - pix.height())),
+        m = self.meta()
+        ax = m.get("ax", m["w"] / 2)                 # 角色中心在圖上的 x（寬圖裡不一定在正中央）
+        ax = (m["w"] - ax) if flip else ax
+        S = QRect(int(round(self.cx - ax * sc)), int(round(self.bottom - pix.height())),
                   pix.width(), pix.height())
+        g = self.screen_geo()
+        W, H = self.window_box()
+        wx = max(g.left(), min(g.right() + 1 - W, int(round(self.cx - W / 2))))
+        U = QRect(wx, int(round(self.bottom)) - H, W, H).united(S)
         if self.bubble.isVisible():
-            # 說話時視窗大小固定（只移動、不縮放），避免視窗管理器縮放時殘影變成兩個對話框
             bp = self.bubble.pix
-            g = self.screen_geo()
-            W = max(56 * sc, bp.width())
-            H = (35 - 3) * sc + bp.height()
-            wx = max(g.left(), min(g.right() + 1 - W, int(round(self.cx - W / 2))))
-            U = QRect(wx, int(round(self.bottom)) - H, W, H)
             bx = max(g.left(), min(g.right() + 1 - bp.width(), int(self.cx) - bp.width() // 2))
-            by = S.top() + self.meta().get("pad_top", 0) * sc - bp.height()
+            by = max(g.top(), S.top() + m.get("pad_top", 0) * sc - bp.height())
             B = QRect(bx, by, bp.width(), bp.height())
             B.moveLeft(max(U.left(), min(U.right() + 1 - B.width(), B.left())))
-            B.moveTop(max(U.top(), g.top(), B.top()))
-            U = U.united(S).united(B)
-        else:
-            U = S
+            U = U.united(B)
         if self.geometry().size() != U.size():
             self.setGeometry(U)
         elif self.pos() != U.topLeft():
@@ -632,6 +712,13 @@ class Pet(QWidget):
     def pick_next(self):
         self.mode = "normal"
         s = self.stats
+        if self.bubble.isVisible():                  # 說話中不換動作：原地繼續，講完再說
+            cur = self.anim_name
+            if cur in ("idle", "read", "snore", "swing"):
+                self._start(cur, 1)
+            else:
+                self.play("idle", 1)
+            return
         m = minute_of_day()
         pool = {"idle": 3, "walk": 3, "run": 2, "read": 2, "walk_weapon": 1, "run_weapon": 1, "swing": 1, "peek": 1}
         if is_pre_sleep(m):
@@ -701,7 +788,6 @@ class Pet(QWidget):
 
     def next_in_queue(self):
         name, loops, line = self.queue.pop(0)
-        self.facing_left = False
         self.play(name, loops)
         icon = None
         if name in ("gift", "guard") and getattr(self, "gift_icon_pending", None) is not None and line:
@@ -709,6 +795,15 @@ class Pet(QWidget):
         self.say(line, icon)
 
     def anim_done(self):
+        if self.trans is not None:
+            if self.anim_name in TRANS_CLIPS:            # 轉換格播完：接下一格，最後才播真正的動作
+                if self.trans[0]:
+                    self.next_clip(); return
+                final, self.trans = self.trans[1], None
+                self._start(*final); return
+            self.trans = None
+        if self.mode == "prep":
+            self.launch_jump(); return
         if self.mode == "climb":
             self.climb_next(); return
         if self.mode == "react" and self.queue:
@@ -727,7 +822,7 @@ class Pet(QWidget):
 
     # ---------- 互動 ----------
     def busy(self):
-        if self.mode in ("climb", "jump", "carry", "fall", "held"):
+        if self.mode in ("climb", "jump", "carry", "fall", "held", "prep"):
             self.say(pick("busy"))
             return True
         return False
@@ -800,7 +895,7 @@ class Pet(QWidget):
             self.input_happened()
             was_sleep = self.mode == "sleep"
             self.mode = "held"
-            self.on_arrive, self.caught = None, False
+            self.on_arrive, self.caught, self.trans = None, False, None
             self.queue.clear()
             self.facing_left = False
             self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "held", 0, 0.0, 0, 0
@@ -919,11 +1014,11 @@ class Pet(QWidget):
                         ("late", is_pre_sleep(m) and m >= 22 * 60)):
             if ok and (key, today) not in self.said_today:
                 self.said_today.add((key, today))
-                self.say(pick(key)); return
+                self.say(pick(key), ambient=True); return
         if s.neglect > 3 * HOUR and random.random() < 0.5:
-            self.say(pick("neglect")); return
+            self.say(pick("neglect"), ambient=True); return
         if random.random() < 0.6:
-            self.say(pick("chat"))
+            self.say(pick("chat"), ambient=True)
 
     def peek_relocate(self):
         """偷看：鑽下去之後，在滑鼠下方附近冒出來（看你在做什麼）。"""
@@ -948,10 +1043,11 @@ class Pet(QWidget):
 
     def begin_climb(self):
         g = self.screen_geo()
-        self.mode, self.climb_phase = "climb", "up"
+        self.mode, self.climb_phase = "climb", "start"
         self.facing_left = self.climb_left          # 圖是朝右（牆在右邊），左邊的牆就翻轉
         self.climb_top = g.bottom() + 1 - random.uniform(0.3, 0.7) * g.height()
-        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "climb", 0, 0.0, 0, 0
+        self.trans = None
+        self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "wall_jump", 0, 0.0, 1, 0
         self.redraw()
 
     def tick_climb(self, dt, g, floor):
@@ -975,6 +1071,10 @@ class Pet(QWidget):
 
     def climb_next(self):
         """掛完了：一半機率直接放手跳下去，一半慢慢爬下來。"""
+        if self.climb_phase == "start":            # 跳上牆了，開始往上爬
+            self.climb_phase = "up"
+            self.anim_name, self.frame, self.frame_t, self.loops_left = "climb", 0, 0.0, 0
+            self.redraw(); return
         if random.random() < 0.5:
             self.mode, self.vy = "fall", 0.0
             self.facing_left = False
@@ -1010,8 +1110,20 @@ class Pet(QWidget):
             self.mode = "normal"
             self.play("idle", 2)
             self.say(pick("chase_high")); return
+        self.mode = "prep"                              # 先轉正、蹲低蓄力，播完再跳（anim_done → launch_jump）
+        self.play("crouch", 1)
+
+    def launch_jump(self):
+        c = QCursor.pos()
+        floor = self.screen_geo().bottom() + 1
+        need = (floor - c.y()) - 22 * self.scale
+        if need > 26 * self.scale:
+            self.mode = "normal"
+            self.play("idle", 2)
+            self.say(pick("chase_high")); return
         self.mode = "jump"
         self.facing_left = False
+        self.trans = None
         self.vy = -(2 * 2600 * max(need + 3 * self.scale, 6 * self.scale)) ** 0.5
         self.anim_name, self.frame, self.frame_t, self.loops_left, self.speed = "reach", 0, 0.0, 0, 0
         self.caught = False
@@ -1114,7 +1226,7 @@ class Pet(QWidget):
         self.last_chime = h
         if not self.stats.settings.get("chime", True) or self.mode == "sleep":
             return
-        self.say(chime_line(h))
+        self.say(chime_line(h), ambient=True)
 
     # ---------- 選單、托盤 ----------
     def build_menu(self, menu):

@@ -7,11 +7,14 @@ cd "$(dirname "$0")/.."
 P="$(cd "${1:-art}" && pwd)"
 python3 tools/build_girl.py "$P" assets
 python3 "$P/make_desktop.py" assets
+python3 "$P/make_transitions.py" assets
 python3 - <<'PY'
 import json, glob, os
 d = {}
 for f in sorted(glob.glob("assets/anims_*.json")):
     d.update(json.load(open(f))); os.remove(f)
+for k, ax in d.pop("_ax", {}).items():      # 寬圖裡角色中心的 x
+    d[k]["ax"] = ax
 json.dump(d, open("assets/anims.json", "w"), indent=1)
 print("ok", len(d), "個動作")
 PY
