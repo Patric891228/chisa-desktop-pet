@@ -13,7 +13,7 @@
 測試用：PET_TIME_SCALE=60 python3 desktop_pet.py（數值的 1 小時變 1 分鐘）。
 換角色：PET_CHARACTER=<資料夾名稱> python3 desktop_pet.py，或從選單「設定 → 角色」切換。
 """
-import json, os, random, sys, time
+import json, os, random, shutil, sys, time
 from datetime import datetime, date
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
@@ -1316,6 +1316,8 @@ class Pet(QWidget):
         a = QAction("開機自動啟動", st, checkable=True, checked=autostart_enabled())
         a.triggered.connect(set_autostart)
         st.addAction(a)
+        st.addSeparator()
+        st.addAction("清除資料並移除…", self.uninstall)
         menu.addSeparator()
         menu.addAction("離開", self.quit)
 
@@ -1517,6 +1519,25 @@ class Pet(QWidget):
         import subprocess
         env = dict(os.environ); env.pop("PET_CHARACTER", None)
         subprocess.Popen(launch_cmd(), env=env)       # 新的那隻開起來時會請這隻離開
+
+    def uninstall(self):
+        """取消開機啟動、刪掉存檔資料夾（好感、設定、行事曆），然後關閉。之後刪掉程式檔就完全移除。"""
+        from PySide6.QtWidgets import QMessageBox
+        ok = QMessageBox.question(
+            None, "清除資料並移除",
+            "這會取消開機自動啟動，並刪除所有存檔（好感度、設定、行事曆），然後關閉程式。\n"
+            f"存檔位置：{CONF_DIR}\n\n刪除後無法復原。之後再把程式檔刪掉，就完全移除了。\n\n確定要繼續嗎？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ok != QMessageBox.Yes:
+            return
+        try:
+            set_autostart(False)
+        except OSError:
+            pass
+        self.stats.save = lambda *a, **k: None        # 關閉時不要再寫回存檔
+        self.timer.stop()
+        shutil.rmtree(CONF_DIR, ignore_errors=True)
+        self.app.quit()
 
     def quit(self):
         self.stats.settings["x"] = int(self.cx)

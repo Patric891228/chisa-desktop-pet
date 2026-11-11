@@ -71,6 +71,7 @@
 | 整點報時 | 每個整點說一句。 |
 | 會爬螢幕邊緣 | 關掉後她只在地面活動。 |
 | 開機自動啟動 | 開機後自動出現。 |
+| 清除資料並移除… | 取消開機啟動、刪除所有存檔並關閉程式。要解除安裝時先按這個。 |
 
 ## 好感度和禮物
 
@@ -89,6 +90,7 @@
 - **Linux 上拖不動，或位置怪怪的**：如果你用的是 Wayland，登入畫面改選「Ubuntu on Xorg」再試一次。
 - **Linux 出現 `Could not load the Qt platform plugin "xcb"`**：執行 `sudo apt install libxcb-cursor0` 後再開一次。
 - **開了兩隻**：新開的那隻會自動把舊的關掉，只會留一隻。
+- **怎麼完全移除**：先在 選單 → 設定 → 「清除資料並移除…」，它會取消開機自動啟動、刪掉所有存檔（好感度、設定、行事曆）並關閉程式，然後再把程式檔刪掉就好。只刪程式檔的話，存檔和開機啟動的設定會留在電腦裡。
 - **存檔在哪裡**：Windows 在 `%APPDATA%\chisa-desktop-pet`，macOS 在 `~/Library/Application Support/chisa-desktop-pet`，Linux 在 `~/.config/desktop-pet`。
 
 ## 字型與授權
