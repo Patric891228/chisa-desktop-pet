@@ -487,13 +487,13 @@ class StatusPanel(QWidget):
         grid = QGridLayout()
         self.aff = QProgressBar(maximum=100); self.aff.setStyleSheet(BAR_CSS % "#f0343c")
         self.eng = QProgressBar(maximum=100); self.eng.setStyleSheet(BAR_CSS % "#96cdff")
-        self.likes = QLabel(); self.likes.setWordWrap(True)
+        self.likes = QLabel(); self.likes.setTextFormat(Qt.RichText)
         self.gifts = QLabel(); self.neglect = QLabel(); self.pats = QLabel(); self.days = QLabel()
         rows = [("好感度", self.aff), ("精力", self.eng), ("禮物", self.gifts), ("喜好", self.likes),
                 ("冷落", self.neglect), ("今天摸頭", self.pats), ("相處", self.days)]
         for r, (k, w) in enumerate(rows):
             lab = QLabel(k); lab.setStyleSheet("color:#9a96c0")
-            grid.addWidget(lab, r, 0); grid.addWidget(w, r, 1)
+            grid.addWidget(lab, r, 0, Qt.AlignTop if w is self.likes else Qt.AlignVCenter); grid.addWidget(w, r, 1)
         L.addLayout(grid)
         btns = QHBoxLayout()
         for text, fn in (("摸頭", pet.do_pat), ("送禮", pet.do_gift)):
@@ -511,15 +511,26 @@ class StatusPanel(QWidget):
     def refresh(self):
         s, pet = self.pet.stats, self.pet
         self.clock.setText(datetime.now().strftime("%H:%M:%S"))
-        self.doing.setText("她正在：" + STATUS_TEXT.get(pet.anim_name, pet.anim_name))
+        if pet.anim_name in STATUS_TEXT:             # 轉場動作沒有名稱：沿用上一個
+            self.doing.setText("她正在：" + STATUS_TEXT[pet.anim_name])
+        elif not self.doing.text():
+            self.doing.setText("她正在：換動作")
         self.aff.setValue(s.affection); self.aff.setFormat(f"{s.affection} / 100")
         self.eng.setValue(int(s.energy)); self.eng.setFormat(f"{int(s.energy)} / 100")
         g = "●" * s.gift_stock + "○" * (GIFT_MAX - s.gift_stock)
         if s.gift_stock < GIFT_MAX:
             g += f"　下一個 {fmt_hours(s.gift_eta() / TIME_SCALE)} 後"
         self.gifts.setText(g)
-        known = [f"{GIFTS[g]['name']} {PREF_TEXT[GIFTS[g]['pref']].split()[0]}" for g in GIFTS if s.gift_log.get(g)]
-        self.likes.setText("、".join(known) + f"（{len(known)}/{len(GIFTS)}）" if known else f"還不知道（0/{len(GIFTS)}），送禮試試看")
+        known = [g for g in GIFTS if s.gift_log.get(g)]
+        if known:                                   # 一行一個禮物，字多也不會被擠掉
+            rows = "".join(f"<tr><td>{GIFTS[g]['name']}</td><td style='padding-left:10px;color:#deb240'>"
+                           f"{PREF_TEXT[GIFTS[g]['pref']].split()[0]}</td></tr>" for g in known)
+            text = f"<table cellspacing='0' cellpadding='1'>{rows}</table>已知 {len(known)}/{len(GIFTS)}"
+        else:
+            text = f"還不知道（0/{len(GIFTS)}），送禮試試看"
+        if text != self.likes.text():
+            self.likes.setText(text)
+            self.adjustSize()
         self.neglect.setText(f"再 {fmt_hours(s.neglect_eta() / TIME_SCALE)} 沒理她，好感 -1")
         self.pats.setText(f"{s.pats_today} 次（前 {PAT_DAILY} 次各 +{PAT_GAIN} 好感）")
         d = (date.today() - date.fromisoformat(s.first_day)).days + 1
