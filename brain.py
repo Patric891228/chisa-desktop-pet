@@ -152,18 +152,14 @@ def day_key(t=None):
 
 
 # ===== 下載 =====
-def _platform_asset_patterns():
-    """llama.cpp Release 裡適合這台電腦的 CPU 版壓縮檔。
-    檔名規則（見 llama.cpp 的 release.yml）：Windows 是 llama-bXXXX-bin-win-cpu-x64.zip，
-    macOS／Linux 是 llama-bXXXX-bin-macos-arm64.tar.gz、llama-bXXXX-bin-ubuntu-x64.tar.gz。"""
+def _platform_asset_names(tag):
+    """llama.cpp Release 裡適合這台電腦的 CPU 版壓縮檔名（見 llama.cpp 的 release.yml／release-publish.yml）：
+    Windows：llama-bXXXX-bin-win-cpu-x64.zip；macOS／Linux：llama-bXXXX-bin-macos-arm64.tar.gz、llama-bXXXX-bin-ubuntu-x64.tar.gz。"""
     mach = platform.machine().lower()
     arch = "arm64" if mach in ("arm64", "aarch64") else "x64"
-    ext = r"\.(zip|tar\.gz)$"
-    if sys.platform == "win32":
-        return [rf"-bin-win-cpu-{arch}{ext}"]
-    if sys.platform == "darwin":
-        return [rf"-bin-macos-{arch}{ext}"]
-    return [rf"-bin-ubuntu-{arch}{ext}"]
+    plat = "win-cpu" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "ubuntu"
+    exts = (".zip",) if sys.platform == "win32" else (".tar.gz", ".zip")
+    return [f"llama-{tag}-bin-{plat}-{arch}{e}" for e in exts]
 
 
 def _fetch_json(url):
@@ -172,20 +168,20 @@ def _fetch_json(url):
         return json.load(r)
 
 
-def find_server_asset():
-    """回傳 (下載網址, 檔名)。先找固定版本，沒有就用最新版。"""
-    pats = _platform_asset_patterns()
-    for api in (f"https://api.github.com/repos/{LLAMA_REPO}/releases/tags/{LLAMA_TAG}",
-                f"https://api.github.com/repos/{LLAMA_REPO}/releases/latest"):
-        try:
-            rel = _fetch_json(api)
-        except Exception:
-            continue
-        for p in pats:
-            for a in rel.get("assets", []):
-                if re.search(p, a.get("name", "")):
-                    return a["browser_download_url"], a["name"]
-    raise RuntimeError("找不到這個系統可用的 llama-server 下載檔")
+def server_candidates():
+    """可能的下載網址（依序嘗試）：先用固定版本直接組網址（不經 GitHub API，不怕次數限制），
+    再問 API 最新版有哪些檔案。"""
+    out = [(f"https://github.com/{LLAMA_REPO}/releases/download/{LLAMA_TAG}/{n}", n)
+           for n in _platform_asset_names(LLAMA_TAG)]
+    try:
+        rel = _fetch_json(f"https://api.github.com/repos/{LLAMA_REPO}/releases/latest")
+        names = _platform_asset_names(rel.get("tag_name", ""))
+        for a in rel.get("assets", []):
+            if a.get("name") in names:
+                out.append((a["browser_download_url"], a["name"]))
+    except Exception:
+        pass
+    return out
 
 
 def download(url, dest, progress, cancel):
@@ -666,10 +662,19 @@ class Brain:
         try:
             if not self.server_path():
                 st["what"] = "llama-server"
-                url, name = find_server_asset()
-                zp = os.path.join(self.dir, "llama-server" + (".tar.gz" if name.endswith(".tar.gz") else ".zip"))
-                download(url, zp, prog, lambda: self.cancel_download)
-                extract_server(zp, self.bin_dir)
+                errors = []
+                for url, name in server_candidates():
+                    zp = os.path.join(self.dir, name)
+                    try:
+                        download(url, zp, prog, lambda: self.cancel_download)
+                        extract_server(zp, self.bin_dir)
+                        break
+                    except InterruptedError:
+                        raise
+                    except Exception as e:
+                        errors.append(f"{name}：{e}")
+                else:
+                    raise RuntimeError("下載 llama-server 失敗：\n" + "\n".join(errors[-3:]))
                 if not self.server_path():
                     raise RuntimeError("解壓縮後找不到 llama-server")
             if not self.has_model():
