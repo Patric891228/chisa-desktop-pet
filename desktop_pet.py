@@ -1811,7 +1811,9 @@ class Pet(QWidget):
         dlg = QProgressDialog("準備下載…", "取消", 0, 1000)
         dlg.setWindowTitle("下載小模型"); dlg.setMinimumWidth(360)
         dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        dlg.setAutoClose(False); dlg.setAutoReset(False)
+        dlg.setAutoClose(False); dlg.setAutoReset(False); dlg.setMinimumDuration(0)
+        dlg.setValue(0)
+        b.cancel_download = False
         dlg.canceled.connect(lambda: setattr(b, "cancel_download", True))
         dlg.show()
         self.llm_progress = dlg
@@ -1825,7 +1827,10 @@ class Pet(QWidget):
         timer.timeout.connect(upd); timer.start()
 
         def done(ok):
-            timer.stop(); dlg.close()
+            timer.stop()
+            cancelled = b.cancel_download
+            dlg.canceled.disconnect()                  # close() 也會發出 canceled，先斷開才不會把錯誤當成取消
+            dlg.close()
             self.llm_progress = None
             st = b.download_state or {}
             if ok:
@@ -1834,7 +1839,7 @@ class Pet(QWidget):
                 self.say(random.choice(b.persona.get("ready") or ["……好了。有事可以跟我說。"]))
                 if then:
                     then()
-            elif not b.cancel_download:
+            elif not cancelled:
                 QMessageBox.warning(None, "下載失敗", f"{st.get('error')}\n\n可以稍後再試一次（會從中斷的地方繼續）。")
         b.submit(b.job_install, done)
 

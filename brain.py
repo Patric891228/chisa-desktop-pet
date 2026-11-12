@@ -456,10 +456,12 @@ class Brain:
             self.results.put((cb, res))
 
     def _log_error(self, e):
+        import traceback
         try:
             os.makedirs(self.dir, exist_ok=True)
             with open(os.path.join(self.dir, "error.log"), "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {type(e).__name__}: {e}\n")
+                f.write("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         except OSError:
             pass
 
@@ -656,7 +658,6 @@ class Brain:
     # ---------- 下載 ----------
     def job_install(self):
         """下載還沒有的 llama-server 和模型。進度放在 download_state。"""
-        self.cancel_download = False
         os.makedirs(self.model_dir, exist_ok=True)
         st = self.download_state = {"what": "", "done": 0, "total": 0, "error": None, "finished": False}
 
