@@ -533,12 +533,17 @@ class Brain:
         tone = p.get("tone", {}).get(self.tier(affection), "")
         rules = [f"只用繁體中文（台灣用語），一次只說一句話，{self.max_chars} 個字以內",
                  "不要用表情符號、不要加引號、不要在句子前面寫名字",
-                 "不要提到自己是 AI、模型或程式", "你是待在使用者電腦桌面上的小角色，稱呼使用者為「你」"]
+                 "不要提到自己是 AI、模型或程式", "你是待在使用者電腦桌面上的小角色，稱呼使用者為「你」",
+                 "角色設定裡沒寫的事（家人、過去、朋友的細節）不要自己編，用你的語氣含糊帶過或說不想講"]
         rules += p.get("rules", [])
         ex = [l for k, v in self.char.get("lines", {}).items() if "@" not in k
               for l in v if "{" not in l and len(l) <= self.max_chars + 5]
         ex = random.sample(ex, min(12, len(ex)))
         s = f"你是「{self.name}」。{p.get('description', '')}\n"
+        prof = {k: v for k, v in (p.get("profile") or {}).items() if v and not str(v).startswith("（")}
+        if prof:
+            s += "角色設定：\n" + "\n".join(f"- {k}：{'、'.join(v) if isinstance(v, list) else v}"
+                                         for k, v in prof.items()) + "\n"
         if p.get("speech"):
             s += f"說話方式：{p['speech']}\n"
         if tone:
