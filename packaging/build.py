@@ -10,6 +10,11 @@ os.chdir(ROOT)
 args = ["desktop_pet.py", "--name", "ChisaDesktopPet", "--noconfirm", "--clean", "--windowed",
         "--add-data", "characters:characters", "--add-data", "fonts:fonts",
         "--exclude-module", "tkinter"]
+try:                                               # 簡轉繁的字典檔（小模型用；沒裝就跳過）
+    import opencc  # noqa: F401
+    args += ["--collect-data", "opencc"]
+except ImportError:
+    pass
 if sys.platform == "darwin":
     args += ["--icon", "packaging/icon.icns", "--osx-bundle-identifier", "com.chisa-desktop-pet"]
 else:

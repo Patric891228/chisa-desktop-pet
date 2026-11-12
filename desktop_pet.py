@@ -11,6 +11,7 @@
 
 數值存在 ~/.config/desktop-pet/save.json。
 測試用：PET_TIME_SCALE=60 python3 desktop_pet.py（數值的 1 小時變 1 分鐘）。
+本地小模型（選配）：見 brain.py；角色包有 persona 才會出現「跟她說一件事」和設定裡的「小模型」。
 換角色：PET_CHARACTER=<資料夾名稱> python3 desktop_pet.py，或從選單「設定 → 角色」切換。
 """
 import json, os, random, shutil, sys, time
@@ -21,10 +22,12 @@ from PySide6.QtGui import (QRegion, QPixmap, QPainter, QTransform, QColor, QFont
                            QIcon, QAction, QActionGroup)
 from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon, QLabel, QProgressBar,
                                QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout, QListWidget, QTimeEdit,
-                               QLineEdit)
+                               QLineEdit, QMessageBox, QProgressDialog)
 from PySide6.QtCore import QPropertyAnimation, QTime
 
-__version__ = "0.1.2"
+from brain import Brain, MODELS, parse_reminder
+
+__version__ = "0.1.3"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 CHAR_ROOT = os.path.join(HERE, "characters")
@@ -178,11 +181,17 @@ ACTION_LINES = CHAR.get("action_lines", {})          # 開始某個動作時偶�
 ACTION_LINE_CHANCE = float(CHAR.get("action_line_chance", 0.3))
 AFF_HIGH, AFF_LOW = 70, 30
 MOOD = {"affection": START_AFFECTION}                  # Pet 會更新；pick() 依好感挑台詞
+BRAIN = None                                           # 本地小模型（有 persona 的角色才有）
 
 
 def pick(key):
-    """台詞：好感高（>=70）時優先從 key@high 挑、低（<30）時從 key@low 挑，沒有就用 key。"""
+    """台詞：好感高（>=70）時優先從 key@high 挑、低（<30）時從 key@low 挑，沒有就用 key。
+    開了小模型的話，偶爾改用它預先產生的新台詞。"""
     a = MOOD["affection"]
+    if BRAIN is not None and LINES.get(key):
+        fresh = BRAIN.take_fresh(key, a)
+        if fresh:
+            return fresh
     tier = "@high" if a >= AFF_HIGH else "@low" if a < AFF_LOW else None
     if tier and LINES.get(key + tier) and (not LINES.get(key) or random.random() < 0.7):
         return random.choice(LINES[key + tier])
@@ -230,7 +239,8 @@ class Stats:
         self.events = {}             # 今日行事曆：{"2026-11-11": [{"t": "15:30", "text": "開會"}, ...]}
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
                          "sit_min": 50, "chime": True, "climb": True, "stay": False,
-                         "passthrough": False}
+                         "passthrough": False,
+                         "llm_on": False, "llm_model": "standard", "llm_fresh": 0.25, "llm_memory": True}
 
     def load(self):
         try:
@@ -601,6 +611,90 @@ class CalendarDialog(QWidget):
             self.refresh()
 
 
+DIALOG_CSS = ("QWidget{background:#181a26;color:#fff0e6;font-size:13px} "
+              "QListWidget,QLineEdit{background:#26242c;border:1px solid #646092;padding:3px}"
+              "QListWidget::item:selected{background:#f0343c}"
+              "QPushButton{background:#2e2a48;border:1px solid #646092;padding:5px 10px;border-radius:4px}"
+              "QPushButton:hover{background:#464068}")
+
+
+# ===== 跟她說一件事（小模型） =====
+class TellDialog(QWidget):
+    """不是自由聊天：告訴她一句近況或請她提醒你，她回一句、記下來。"""
+    def __init__(self, pet):
+        super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
+        self.pet = pet
+        self.setWindowTitle(f"跟{CHAR.get('name', '她')}說一件事")
+        self.setStyleSheet(DIALOG_CSS)
+        L = QVBoxLayout(self)
+        hint = QLabel("例如：三點半提醒我開會／20 分鐘後叫我／明天要考試／今天好累")
+        hint.setStyleSheet("color:#9a96c0"); hint.setWordWrap(True)
+        L.addWidget(hint)
+        row = QHBoxLayout()
+        self.text = QLineEdit(); self.text.setMaxLength(40)
+        self.text.returnPressed.connect(self.send)
+        b = QPushButton("說"); b.clicked.connect(self.send)
+        row.addWidget(self.text, 1); row.addWidget(b)
+        L.addLayout(row)
+        self.setFixedWidth(380)
+
+    def showEvent(self, e):
+        self.text.clear(); self.text.setFocus(); super().showEvent(e)
+
+    def send(self):
+        t = self.text.text().strip()
+        if t:
+            self.hide()
+            self.pet.on_tell(t)
+
+
+# ===== 查看記憶 =====
+class MemoryDialog(QWidget):
+    def __init__(self, pet):
+        super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
+        self.pet = pet
+        self.setWindowTitle("她記得的事")
+        self.setStyleSheet(DIALOG_CSS)
+        L = QVBoxLayout(self)
+        hint = QLabel("只存在這台電腦。「跟她說一件事」的內容會整理成一句記下來，最多 7 天；"
+                      "另外會記每天開始和最後用電腦的時間、摸頭和送禮次數（不記你在做什麼）。")
+        hint.setStyleSheet("color:#9a96c0"); hint.setWordWrap(True)
+        L.addWidget(hint)
+        self.list = QListWidget(); L.addWidget(self.list)
+        row = QHBoxLayout()
+        for text, fn in (("忘記選取的", self.remove), ("全部忘記", self.clear)):
+            b = QPushButton(text); b.clicked.connect(fn); row.addWidget(b)
+        L.addLayout(row)
+        self.setFixedWidth(400)
+
+    def showEvent(self, e):
+        self.refresh(); super().showEvent(e)
+
+    def refresh(self):
+        self.list.clear()
+        b = self.pet.brain
+        for n in b.mem["notes"]:
+            d = date.fromisoformat(n["day"])
+            self.list.addItem(f"{d.month}/{d.day}　{n['text']}")
+        if not b.mem["notes"]:
+            self.list.addItem("（還沒有跟她說過什麼）")
+        for k in sorted(b.mem["days"], reverse=True)[:3]:
+            d = date.fromisoformat(k)
+            facts = b.day_facts(k)
+            if facts:
+                self.list.addItem(f"{d.month}/{d.day}　" + "，".join(facts))
+
+    def remove(self):
+        i = self.list.currentRow()
+        if 0 <= i < len(self.pet.brain.mem["notes"]):
+            self.pet.brain.forget(i)
+            self.refresh()
+
+    def clear(self):
+        self.pet.brain.forget()
+        self.refresh()
+
+
 # ===== 寵物本體 =====
 class Pet(QWidget):
     TICK_MS = 33
@@ -619,6 +713,11 @@ class Pet(QWidget):
         self.sprite_rect = QRect()
         self.bubble_rect = QRect()
         self.panel = StatusPanel(self)
+        global BRAIN
+        persona = CHAR.get("persona") or {}            # 範本裡還沒填的 persona（「（」開頭）不算
+        use = bool(persona.get("description")) and not persona["description"].startswith("（")
+        self.brain = BRAIN = Brain(CONF_DIR, CHAR, self.stats.settings, CHAR_ID) if use else None
+        self.started_at, self.last_refill = time.time(), 0.0
         self.apply_on_top(self.stats.settings["on_top"], init=True)
 
         g = self.screen_geo()
@@ -946,6 +1045,8 @@ class Pet(QWidget):
         elif s.pats_today == PAT_DAILY + 2:
             line = pick("pat_cap")
         s.pats_today += 1
+        if self.brain is not None:
+            self.brain.log("pats")
         reacts = [r for r in REACTIONS if self.has(r)] or ["idle"]
         self.react([("headpat", 1, None), (random.choice(reacts), 1, line)])
 
@@ -967,6 +1068,8 @@ class Pet(QWidget):
         s.gift_stock -= 1
         s.add_affection(gift["gain"])
         s.gift_log[gid] = s.gift_log.get(gid, 0) + 1
+        if self.brain is not None:
+            self.brain.log("gift", gift["name"])
         line = random.choice(gift["lines"])
         plan = CHAR.get("gift_reactions", {}).get(gift["pref"]) or [["gift", 1]]
         steps = [(n if self.has(n) else "idle", k, line if i == 0 else None) for i, (n, k) in enumerate(plan)]
@@ -1037,6 +1140,10 @@ class Pet(QWidget):
             self.stat_save_t = now
             s.settings["x"] = int(self.cx)
             s.save()
+            if self.brain is not None and self.brain.enabled:
+                self.brain.save()
+        if self.brain is not None:
+            self.brain.poll()
 
         self.check_calendar()
         if self.mode in ("hidden", "fading"):
@@ -1119,6 +1226,8 @@ class Pet(QWidget):
                 self.say(pick(key), ambient=True); return
         if s.neglect > 3 * HOUR and random.random() < 0.5:
             self.say(pick("neglect"), ambient=True); return
+        if self.brain_idle(now):
+            return
         if random.random() < 0.6:
             self.say(pick("chat"), ambient=True)
 
@@ -1192,6 +1301,8 @@ class Pet(QWidget):
         cur = QCursor.pos()
         if cur != self.last_cursor:
             self.last_cursor = cur
+            if self.brain is not None and now - self.last_move > 30:
+                self.brain.log("active")
             if now - self.last_move > 5 * 60 / TIME_SCALE:     # 離開超過 5 分鐘：算有休息
                 self.sit_start = now
                 if self.sit_reminded and self.mode == "normal":
@@ -1204,6 +1315,8 @@ class Pet(QWidget):
         if now - self.sit_start >= limit * 60 / TIME_SCALE and self.mode == "normal":
             self.next_sit = now + 10 * 60 / TIME_SCALE                # 沒休息的話，10 分鐘後再提醒
             self.sit_reminded = True
+            if self.brain is not None:
+                self.brain.log("sit")
             mins = int((now - self.sit_start) * TIME_SCALE // 60)
             self.react([("stretch", 2, (pick("sit") or "坐 {m} 分鐘了，起來動一動吧。").format(m=mins))])
 
@@ -1231,6 +1344,8 @@ class Pet(QWidget):
         sleeping = self.mode == "sleep"
         im = menu.addMenu("互動")
         im.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
+        if self.brain is not None:
+            menu.addAction("跟她說一件事…", self.tell)
         gm = menu.addMenu("送禮")
         info = gm.addAction(f"剩 {self.stats.gift_stock} 個" if self.stats.gift_stock else
                             f"禮物送完了，{fmt_hours(self.stats.gift_eta() / TIME_SCALE)} 後補一個")
@@ -1313,6 +1428,8 @@ class Pet(QWidget):
                 a = QAction(nm, cm, checkable=True, checked=cid == CHAR_ID)
                 a.triggered.connect(lambda _=False, c=cid: self.switch_character(c))
                 cgrp.addAction(a); cm.addAction(a)
+        if self.brain is not None:
+            self.build_llm_menu(st.addMenu("小模型（AI）"))
         a = QAction("開機自動啟動", st, checkable=True, checked=autostart_enabled())
         a.triggered.connect(set_autostart)
         st.addAction(a)
@@ -1535,6 +1652,9 @@ class Pet(QWidget):
         except OSError:
             pass
         self.stats.save = lambda *a, **k: None        # 關閉時不要再寫回存檔
+        if self.brain is not None:
+            self.brain.stop()                          # Windows：模型檔還開著的話刪不掉
+            self.brain.save = lambda *a, **k: None
         self.timer.stop()
         shutil.rmtree(CONF_DIR, ignore_errors=True)
         self.app.quit()
@@ -1543,6 +1663,192 @@ class Pet(QWidget):
         self.stats.settings["x"] = int(self.cx)
         self.stats.save()
         self.app.quit()
+
+    # ---------- 本地小模型 ----------
+    def brain_idle(self, now):
+        """閒著的時候：補新台詞、提起昨天的事、問你之前說過的事。有說話就回傳 True。"""
+        b = self.brain
+        if b is None or not b.ready() or b.busy:
+            return False
+        aff = self.stats.affection
+        keys = b.want_refill(aff)
+        if keys and now - self.last_refill > 30 * 60:
+            self.last_refill = now
+            b.submit(lambda: b.job_fresh(keys, aff))
+            return False
+        if not self.stats.settings.get("llm_memory", True):
+            return False
+        from brain import day_key
+        rk = "recap:" + day_key()
+        if not b.is_done(rk) and now - self.started_at > 10 * 60 and random.random() < 0.5:
+            b.mark_done(rk)
+            b.submit(lambda: b.job_recap(aff), lambda line: line and self.say(line, ambient=True))
+            return True
+        note = b.due_note()
+        if note and random.random() < 0.4:
+            b.submit(lambda: b.job_follow_up(note, aff), lambda line: line and self.say(line, ambient=True))
+            return True
+        return False
+
+    def tell(self):
+        if self.brain is None:
+            return
+        if not self.brain.ready():
+            self.setup_llm(then=self.tell); return
+        if not hasattr(self, "tell_dialog"):
+            self.tell_dialog = TellDialog(self)
+        self.tell_dialog.show(); self.tell_dialog.raise_(); self.tell_dialog.activateWindow()
+
+    def on_tell(self, text):
+        """先用規則找時間（找到就是提醒），找不到就當成近況，交給模型回一句並記下來。"""
+        b, aff = self.brain, self.stats.affection
+        self.input_happened()
+        if self.mode == "sleep":
+            self.react(self.wake_prefix())
+        if self.mode in ("hidden", "fading"):
+            self.come_back("……")
+        r = parse_reminder(text)
+        if r:
+            when, task = r
+            day = when.date()
+            self.stats.events.setdefault(day.isoformat(), []).append({"t": f"{when:%H:%M}", "text": task})
+            self.stats.save()
+            label = ("" if day == date.today() else "明天 " if (day - date.today()).days == 1
+                     else f"{day.month}/{day.day} ") + f"{when:%H:%M}"
+            record = f"記下來了：{label} {task}"
+            self.say("……", hold_ms=60000)
+            b.submit(lambda: b.job_reminder(when, task, aff), lambda line: self.reply(line, record))
+        else:
+            self.say("……", hold_ms=60000)
+            fallback = random.choice(b.persona.get("fallback") or ["嗯，我記住了。"])
+            if self.stats.settings.get("llm_memory", True):
+                job = lambda: b.job_note(text, aff)
+            else:
+                job = lambda: b.clean(b.complete(b.system_prompt(aff), f"使用者說：「{text}」。用一句話反應。", 60))
+            b.submit(job, lambda line: self.reply(line or fallback))
+
+    def reply(self, line, then=None):
+        """模型的回覆（失敗時 line 是 None）。then：接著再說一句（例如提醒的時間）。"""
+        if line:
+            self.bubble.hide()
+            self.say(line)
+            if then:
+                self.pending_line = then
+        elif then:
+            self.bubble.hide()
+            self.say(then)
+        else:
+            self.bubble.hide()
+
+    def build_llm_menu(self, lm):
+        b, st = self.brain, self.stats.settings
+        dl = getattr(self, "llm_progress", None) is not None
+        state = "下載中…" if dl else "使用中" if b.ready() else "已下載，未啟用" if b.installed() else "未下載"
+        a = lm.addAction(f"狀態：{state}"); a.setEnabled(False)
+        a = QAction("啟用", lm, checkable=True, checked=b.enabled)
+        a.triggered.connect(lambda on: self.set_llm(on))
+        a.setEnabled(not dl)
+        lm.addAction(a)
+        mm = lm.addMenu("模型")
+        grp = QActionGroup(mm)
+        for key, info in MODELS.items():
+            a = QAction(info["label"], mm, checkable=True, checked=st.get("llm_model", "standard") == key)
+            a.triggered.connect(lambda _=False, k=key: self.set_llm_model(k))
+            a.setEnabled(not dl)
+            grp.addAction(a); mm.addAction(a)
+        fm = lm.addMenu("台詞換新")
+        fgrp = QActionGroup(fm)
+        for label, v in (("關閉（只用原本的台詞）", 0.0), ("偶爾", 0.15), ("有時候", 0.25), ("常常", 0.5)):
+            a = QAction(label, fm, checkable=True, checked=abs(float(st.get("llm_fresh", 0.25)) - v) < 1e-6)
+            a.triggered.connect(lambda _=False, v=v: st.__setitem__("llm_fresh", v))
+            fgrp.addAction(a); fm.addAction(a)
+        a = QAction("短期記憶", lm, checkable=True, checked=bool(st.get("llm_memory", True)))
+        a.triggered.connect(lambda on: st.__setitem__("llm_memory", on))
+        lm.addAction(a)
+        lm.addAction("查看記憶…", self.show_memory)
+        lm.addSeparator()
+        mb = b.disk_mb()
+        a = lm.addAction(f"刪除下載的檔案（{mb} MB）…", self.remove_llm)
+        a.setEnabled(mb > 0 and not dl)
+
+    def set_llm(self, on):
+        b = self.brain
+        if on and not b.installed():
+            self.setup_llm(); return
+        self.stats.settings["llm_on"] = bool(on)
+        self.stats.save()
+        if not on:
+            b.stop()
+
+    def set_llm_model(self, key):
+        self.stats.settings["llm_model"] = key
+        self.brain.stop()
+        self.brain.mem["fresh"].clear()
+        if self.brain.enabled and not self.brain.has_model():
+            self.setup_llm()
+
+    def setup_llm(self, then=None):
+        """第一次啟用：說明、徵求同意，再下載 llama-server 和模型。"""
+        b = self.brain
+        if getattr(self, "llm_progress", None) is not None:
+            self.llm_progress.show(); return
+        if not b.installed():
+            ok = QMessageBox.question(
+                None, "啟用小模型",
+                f"要讓{CHAR.get('name', '她')}偶爾說新台詞、聽懂「三點半提醒我開會」、記得你說過的事，"
+                f"需要先下載：\n\n・llama-server（執行模型的程式，來自 GitHub 的 llama.cpp）\n"
+                f"・{b.model_info()['label']}（來自 Hugging Face）\n\n"
+                f"大約 {b.missing_mb()} MB，只需要下載一次，存在：\n{b.dir}\n\n"
+                "之後完全在你的電腦上執行，不會把任何內容傳到網路上。\n要開始下載嗎？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ok != QMessageBox.Yes:
+                return
+        else:
+            self.stats.settings["llm_on"] = True
+            if then:
+                then()
+            return
+        dlg = QProgressDialog("準備下載…", "取消", 0, 1000)
+        dlg.setWindowTitle("下載小模型"); dlg.setMinimumWidth(360)
+        dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dlg.setAutoClose(False); dlg.setAutoReset(False)
+        dlg.canceled.connect(lambda: setattr(b, "cancel_download", True))
+        dlg.show()
+        self.llm_progress = dlg
+        timer = QTimer(self, interval=200)
+
+        def upd():
+            st = b.download_state or {}
+            if st.get("total"):
+                dlg.setValue(min(999, int(st["done"] * 1000 / st["total"])))
+                dlg.setLabelText(f"下載 {st['what']}：{st['done'] >> 20} / {st['total'] >> 20} MB")
+        timer.timeout.connect(upd); timer.start()
+
+        def done(ok):
+            timer.stop(); dlg.close()
+            self.llm_progress = None
+            st = b.download_state or {}
+            if ok:
+                self.stats.settings["llm_on"] = True
+                self.stats.save()
+                self.say(random.choice(b.persona.get("ready") or ["……好了。有事可以跟我說。"]))
+                if then:
+                    then()
+            elif not b.cancel_download:
+                QMessageBox.warning(None, "下載失敗", f"{st.get('error')}\n\n可以稍後再試一次（會從中斷的地方繼續）。")
+        b.submit(b.job_install, done)
+
+    def show_memory(self):
+        if not hasattr(self, "memory_dialog"):
+            self.memory_dialog = MemoryDialog(self)
+        self.memory_dialog.show(); self.memory_dialog.raise_(); self.memory_dialog.activateWindow()
+
+    def remove_llm(self):
+        ok = QMessageBox.question(None, "刪除小模型", f"刪除下載的 llama-server 和模型檔（{self.brain.disk_mb()} MB）並關閉小模型？\n"
+                                  "記憶不會刪除。之後要用可以再下載。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ok == QMessageBox.Yes:
+            self.stats.settings["llm_on"] = False
+            self.brain.remove_downloads()
 
 
 # ===== 開機自動啟動（Linux：autostart .desktop；Windows：登錄檔 Run；macOS：LaunchAgent）=====
@@ -1648,6 +1954,9 @@ def main():
     pet.show()
     server.newConnection.connect(lambda: _on_other_instance(server, app))
     app.aboutToQuit.connect(pet.stats.save)
+    if pet.brain is not None:
+        app.aboutToQuit.connect(pet.brain.stop)
+        app.aboutToQuit.connect(pet.brain.save)
     sys.exit(app.exec())
 
 
