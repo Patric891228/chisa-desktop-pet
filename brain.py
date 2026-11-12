@@ -145,6 +145,22 @@ def _task(text, m):
     return rest[:20] or "時間到了"
 
 
+# 使用者提到自己近況的線索（有才去整理記憶，省一次模型呼叫）
+NEWS_RE = re.compile(r"明天|後天|今天|今晚|昨天|下週|下禮拜|週末|等等|待會|考|報告|作業|上班|上課|開會|面試|醫生|看病|生病|"
+                     r"感冒|發燒|累|睏|出門|回家|旅行|出差|約|生日|搬家|加班|比賽|我要|我會|我剛|我在")
+
+
+def similar(a, b):
+    """兩句話是不是幾乎一樣（去掉標點後相同、互相包含，或字重疊七成以上）。"""
+    a, b = re.sub(r"[\W_]", "", a), re.sub(r"[\W_]", "", b)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    common = sum(min(a.count(c), b.count(c)) for c in set(a))
+    return common / max(len(a), len(b)) > 0.7
+
+
 def day_key(t=None):
     return (datetime.fromtimestamp(t or time.time()) - timedelta(hours=DAY_CUTOFF_H)).date().isoformat()
 
@@ -510,7 +526,9 @@ class Brain:
         msgs += [{"role": r, "content": c} for r, c in history]
         msgs.append({"role": "user", "content": user})
         body = {"messages": msgs,
-                "max_tokens": max_tokens, "temperature": temperature, "top_p": 0.9, "stream": False,
+                "max_tokens": max_tokens, "temperature": temperature, "stream": False,
+                # Qwen3 非思考模式建議的取樣設定，加上防重複（小模型很容易一直講同一句）
+                "top_p": 0.8, "top_k": 20, "presence_penalty": 1.0, "repeat_penalty": 1.1,
                 "chat_template_kwargs": {"enable_thinking": False}}
         if schema:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
@@ -599,27 +617,40 @@ class Brain:
         return self.clean(self.complete(sys_p, user, max_tokens=60))
 
     def job_chat(self, text, history, affection, remember=True):
-        """聊天：用角色的語氣回一兩句；使用者提到值得記的近況（考試、生病、出門…）就記下來。
+        """聊天：用角色的語氣回一兩句（純文字，比 JSON 自然）；跟她最近說過的話太像就重來一次。
+        使用者提到自己的近況（考試、生病、出門…）時，另外用一次短短的呼叫整理成記憶。
         history 是最近幾輪對話 [(role, 內容), ...]，只存在記憶體裡，不寫進檔案。"""
         sys_p = self.system_prompt(affection) + (
-            "\n現在使用者在跟你聊天。用你的語氣自然地回應，一到兩句就好。"
+            "\n現在使用者在跟你聊天。針對他剛剛說的那句話回應，一到兩句就好。"
+            "不要重複你之前說過的句子，也不要只是背出角色設定。"
             "遇到你不知道的知識問題，就用角色的方式說不知道，不要編造。")
-        if not remember:
-            return self.clean(self.complete(sys_p, text, max_tokens=80, history=history), self.max_chars * 2)
+        said = [c for r, c in history if r == "assistant"][-4:]
+        reply = None
+        for attempt in range(2):
+            out = self.complete(sys_p, text, max_tokens=90, history=history, temperature=0.8 + 0.2 * attempt)
+            reply = self.clean(out, self.max_chars * 2)
+            if reply and not any(similar(reply, x) for x in said):
+                break
+            reply = None
+        if remember and NEWS_RE.search(text):
+            try:
+                self.extract_memory(text)
+            except Exception as e:
+                self._log_error(e)
+        return reply
+
+    def extract_memory(self, text):
         schema = {"type": "object", "properties": {
-            "reply": {"type": "string", "minLength": 1, "maxLength": self.max_chars * 2},
             "memory": {"type": "string", "maxLength": 40},
-            "ask_later": {"type": "boolean"}}, "required": ["reply", "memory", "ask_later"]}
-        user = (f"使用者說：「{text}」\n"
-                "請回傳 JSON：reply 是你回他的話；如果他提到自己最近的事，memory 用第三人稱整理成一句短短的紀錄"
-                "（例如：使用者明天要考數學），只是閒聊就填空字串；ask_later 表示之後值得主動問他後續"
-                "（例如考試、看醫生、出門），是就填 true。")
-        d = self.complete_json(sys_p, user, schema, max_tokens=200, temperature=0.7, history=history)
-        reply = self.clean(d.get("reply", ""), self.max_chars * 2)
+            "ask_later": {"type": "boolean"}}, "required": ["memory", "ask_later"]}
+        user = (f"使用者說：「{text}」\n如果這句話提到他自己最近或接下來的事，memory 用第三人稱整理成一句短短的紀錄"
+                "（例如：使用者明天要考數學）；只是閒聊或問問題就填空字串。ask_later：之後值得主動問他後續"
+                "（例如考試、看醫生、出門、面試）就填 true。")
+        d = self.complete_json("你負責把使用者說的話整理成簡短的繁體中文紀錄，只回傳 JSON。", user, schema,
+                               max_tokens=80, temperature=0.2)
         memo = self.clean(str(d.get("memory", "")), 40)
         if memo:
             self.add_note(memo, bool(d.get("ask_later")))
-        return reply
 
     def add_note(self, memo, ask_later):
         with self.lock:
