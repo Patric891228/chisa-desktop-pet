@@ -505,10 +505,6 @@ class StatusPanel(QWidget):
             lab = QLabel(k); lab.setStyleSheet("color:#9a96c0")
             grid.addWidget(lab, r, 0, Qt.AlignTop if w is self.likes else Qt.AlignVCenter); grid.addWidget(w, r, 1)
         L.addLayout(grid)
-        btns = QHBoxLayout()
-        for text, fn in (("摸頭", pet.do_pat), ("送禮", pet.do_gift)):
-            b = QPushButton(text); b.clicked.connect(fn); btns.addWidget(b)
-        L.addLayout(btns)
         self.setFixedWidth(330)
         self.timer = QTimer(self, interval=500, timeout=self.refresh)
 
@@ -924,7 +920,8 @@ class Pet(QWidget):
         self.mode = "normal"
         s = self.stats
         stationary = {"idle", "read", "snore"} | {n for n, e in EXTRA.items() if e.get("stay_pool")}
-        if self.bubble.isVisible():                  # 說話中不換動作：原地繼續，講完再說
+        chatting = getattr(self, "chat_dialog", None) is not None and self.chat_dialog.isVisible()
+        if self.bubble.isVisible() or chatting:      # 說話中、聊天框開著：不走動，原地繼續
             cur = self.anim_name
             if cur in stationary:
                 self._start(cur, 1)
@@ -1722,6 +1719,10 @@ class Pet(QWidget):
             self.setup_llm(then=lambda: self.open_chat(pt)); return
         if not hasattr(self, "chat_dialog"):
             self.chat_dialog = ChatDialog(self)
+        if self.mode == "normal" and (self.speed or self.trans or self.anim_name in MOVE_SPEED
+                                      or self.anim_name == "peek"):
+            self.speed, self.on_arrive, self.trans = 0, None, None   # 聊天時停下來，站在原地（轉身中的也取消）
+            self.play("idle", 2)
         top = self.mapToGlobal(self.sprite_rect.topLeft())
         self.chat_dialog.open_near(QPoint(int(self.cx), top.y()))
 
