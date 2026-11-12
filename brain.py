@@ -10,7 +10,7 @@ llama-server 和模型檔，放在設定資料夾的 llm/ 底下。
 import json, os, platform, queue, random, re, shutil, socket, subprocess, sys, threading, time, urllib.request, zipfile
 from datetime import datetime, date, timedelta
 
-LLAMA_TAG = "b12300"              # llama.cpp 的版本（GitHub Release 標籤）；找不到時改用最新版
+LLAMA_TAG = "b12250"              # llama.cpp 的版本（GitHub Release 標籤）；找不到時改用最新版
 LLAMA_REPO = "ggml-org/llama.cpp"
 MODELS = {
     "standard": {"label": "標準（Qwen3 1.7B，約 1.1 GB）", "file": "Qwen3-1.7B-Q4_K_M.gguf", "mb": 1100,
