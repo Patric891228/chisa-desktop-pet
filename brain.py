@@ -13,11 +13,9 @@ from datetime import datetime, date, timedelta
 LLAMA_TAG = "b12250"              # llama.cpp 的版本（GitHub Release 標籤）；找不到時改用最新版
 LLAMA_REPO = "ggml-org/llama.cpp"
 MODELS = {
-    "standard": {"label": "標準（Qwen3 1.7B，約 1.1 GB）", "file": "Qwen3-1.7B-Q4_K_M.gguf", "mb": 1100,
+    "standard": {"label": "Qwen3 1.7B（約 1.1 GB）", "file": "Qwen3-1.7B-Q4_K_M.gguf", "mb": 1100,
                  "url": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf"},
-    "light":    {"label": "輕量（Qwen3 0.6B，約 400 MB）", "file": "Qwen3-0.6B-Q4_K_M.gguf", "mb": 400,
-                 "url": "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"},
-}
+}                                 # 固定用這個；開發時可以用 PET_LLM_MODEL 指定別的 GGUF
 IDLE_UNLOAD_S = 10 * 60           # 10 分鐘沒用就把模型關掉，平常不佔記憶體
 MEMORY_DAYS, MEMORY_MAX = 7, 20   # 短期記憶：最多 7 天、20 條
 DAY_CUTOFF_H = 5                  # 凌晨 5 點前還算前一天（熬夜也算同一天）
@@ -292,7 +290,7 @@ class Brain:
         return bool(self.persona) and bool(self.settings.get("llm_on", False))
 
     def model_info(self):
-        return MODELS.get(self.settings.get("llm_model", "standard"), MODELS["standard"])
+        return MODELS["standard"]
 
     def model_path(self):
         p = os.environ.get("PET_LLM_MODEL") or self.settings.get("llm_model_path")
@@ -504,11 +502,14 @@ class Brain:
             except subprocess.TimeoutExpired:
                 p.kill()
 
-    def complete(self, system, user, max_tokens=120, schema=None, temperature=0.8):
-        """在背景執行緒呼叫。回傳模型的文字（已去掉思考段落）。"""
+    def complete(self, system, user, max_tokens=120, schema=None, temperature=0.8, history=()):
+        """在背景執行緒呼叫。history：之前的對話 [(role, 內容), ...]。回傳模型的文字（已去掉思考段落）。"""
         self.start()
         self.last_use = time.time()
-        body = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        msgs = [{"role": "system", "content": system}]
+        msgs += [{"role": r, "content": c} for r, c in history]
+        msgs.append({"role": "user", "content": user})
+        body = {"messages": msgs,
                 "max_tokens": max_tokens, "temperature": temperature, "top_p": 0.9, "stream": False,
                 "chat_template_kwargs": {"enable_thinking": False}}
         if schema:
@@ -521,7 +522,7 @@ class Brain:
         self.last_use = time.time()
         return re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
 
-    def complete_json(self, system, user, schema, **kw):
+    def complete_json(self, system, user, schema, **kw):  # kw 可帶 history
         text = self.complete(system, user, schema=schema, **kw)
         m = re.search(r"\{.*\}", text, re.S)
         return json.loads(m.group(0) if m else text)
@@ -592,23 +593,27 @@ class Brain:
         user = f"使用者請你在{day} {when:%H:%M} 提醒他「{task}」。用一句話答應他。"
         return self.clean(self.complete(sys_p, user, max_tokens=60))
 
-    def job_note(self, text, affection):
-        """「跟她說一件事」：回一句反應，並整理成一條記憶。"""
+    def job_chat(self, text, history, affection, remember=True):
+        """聊天：用角色的語氣回一兩句；使用者提到值得記的近況（考試、生病、出門…）就記下來。
+        history 是最近幾輪對話 [(role, 內容), ...]，只存在記憶體裡，不寫進檔案。"""
         sys_p = self.system_prompt(affection) + (
-            "\n使用者會告訴你一件他最近的事。你只要用一句話自然地反應（關心、吐槽或鼓勵都可以），"
-            "不用回答問題或給建議清單。")
+            "\n現在使用者在跟你聊天。用你的語氣自然地回應，一到兩句就好。"
+            "遇到你不知道的知識問題，就用角色的方式說不知道，不要編造。")
+        if not remember:
+            return self.clean(self.complete(sys_p, text, max_tokens=80, history=history), self.max_chars * 2)
         schema = {"type": "object", "properties": {
-            "reply": {"type": "string", "minLength": 1, "maxLength": self.max_chars + 8},
-            "memory": {"type": "string", "minLength": 2, "maxLength": 40},
+            "reply": {"type": "string", "minLength": 1, "maxLength": self.max_chars * 2},
+            "memory": {"type": "string", "maxLength": 40},
             "ask_later": {"type": "boolean"}}, "required": ["reply", "memory", "ask_later"]}
         user = (f"使用者說：「{text}」\n"
-                "請回傳 JSON：reply 是你說的一句話；memory 是用第三人稱把這件事整理成一句短短的紀錄"
-                "（例如：使用者明天要考數學）；ask_later 表示之後值得主動問他後續（例如考試、看醫生、出門），"
-                "是就填 true。")
-        d = self.complete_json(sys_p, user, schema, max_tokens=160, temperature=0.7)
-        reply = self.clean(d.get("reply", ""))
-        memo = self.clean(str(d.get("memory", "")), 40) or f"使用者說：{text[:30]}"
-        self.add_note(memo, bool(d.get("ask_later")))
+                "請回傳 JSON：reply 是你回他的話；如果他提到自己最近的事，memory 用第三人稱整理成一句短短的紀錄"
+                "（例如：使用者明天要考數學），只是閒聊就填空字串；ask_later 表示之後值得主動問他後續"
+                "（例如考試、看醫生、出門），是就填 true。")
+        d = self.complete_json(sys_p, user, schema, max_tokens=200, temperature=0.7, history=history)
+        reply = self.clean(d.get("reply", ""), self.max_chars * 2)
+        memo = self.clean(str(d.get("memory", "")), 40)
+        if memo:
+            self.add_note(memo, bool(d.get("ask_later")))
         return reply
 
     def add_note(self, memo, ask_later):

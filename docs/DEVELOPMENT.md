@@ -45,7 +45,7 @@ PET_CHARACTER=<角色 id> ./run.sh
 工作在背景執行緒，結果由桌寵每一格呼叫 `Brain.poll()` 交回主執行緒。出錯或逾時一律退回角色包的固定台詞。
 
 - 下載位置：存檔資料夾的 `llm/bin/`（llama-server，固定版本見 `LLAMA_TAG`）和 `llm/models/`（GGUF 模型，清單見 `MODELS`）。
-- 記憶：存檔資料夾的 `memory_<角色>.json`（notes：使用者說的事；days：每天的使用時間和互動次數；fresh：預先產生的新台詞）。
+- 記憶：存檔資料夾的 `memory_<角色>.json`（notes：聊天時提到的近況，聊天內容本身不存；days：每天的使用時間和互動次數；fresh：預先產生的新台詞）。
 - 開發時不想下載，可以指定自己的檔案：
 
 ```bash

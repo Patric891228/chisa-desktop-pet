@@ -5,13 +5,13 @@
 預設角色是千咲。新角色的做法見 docs/CHARACTER_GUIDE.md。
 
 操作：
-  左鍵點她      互動選單：摸頭、送禮、看狀態、設定、離開
+  左鍵點她      選單：摸頭、送禮、看狀態、設定、離開
   左鍵拖曳      把她拎起來，放開會掉下去、落地
-  右鍵          同左鍵選單
+  右鍵          聊天框（開了小模型才有；沒有的話同左鍵選單）
 
 數值存在 ~/.config/desktop-pet/save.json。
 測試用：PET_TIME_SCALE=60 python3 desktop_pet.py（數值的 1 小時變 1 分鐘）。
-本地小模型（選配）：見 brain.py；角色包有 persona 才會出現「跟她說一件事」和設定裡的「小模型」。
+本地小模型（選配）：見 brain.py；角色包有 persona 才會有聊天框（右鍵）和設定裡的「小模型」。
 換角色：PET_CHARACTER=<資料夾名稱> python3 desktop_pet.py，或從選單「設定 → 角色」切換。
 """
 import json, os, random, shutil, sys, time
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QMenu, QSystemTrayIcon, QL
                                QLineEdit, QMessageBox, QProgressDialog)
 from PySide6.QtCore import QPropertyAnimation, QTime
 
-from brain import Brain, MODELS, parse_reminder
+from brain import Brain, parse_reminder
 
 __version__ = "0.1.3"
 FROZEN = getattr(sys, "frozen", False)          # 打包成執行檔（PyInstaller）時為 True
@@ -240,7 +240,7 @@ class Stats:
         self.settings = {"scale": 4, "on_top": True, "schedule": True, "x": None, "chat": True, "bubble": "paper",
                          "sit_min": 50, "chime": True, "climb": True, "stay": False,
                          "passthrough": False,
-                         "llm_on": False, "llm_model": "standard", "llm_fresh": 0.25, "llm_memory": True}
+                         "llm_on": False, "llm_fresh": 0.25, "llm_memory": True}
 
     def load(self):
         try:
@@ -618,34 +618,54 @@ DIALOG_CSS = ("QWidget{background:#181a26;color:#fff0e6;font-size:13px} "
               "QPushButton:hover{background:#464068}")
 
 
-# ===== 跟她說一件事（小模型） =====
-class TellDialog(QWidget):
-    """不是自由聊天：告訴她一句近況或請她提醒你，她回一句、記下來。"""
+# ===== 聊天框（小模型；右鍵打開，點外面就關） =====
+class ChatDialog(QWidget):
+    """聊天：可以閒聊，也可以說「三點半提醒我開會」，提醒會直接排進行事曆。"""
     def __init__(self, pet):
-        super().__init__(None, Qt.Window | Qt.WindowStaysOnTopHint)
+        super().__init__(None, Qt.Popup | Qt.FramelessWindowHint)
         self.pet = pet
-        self.setWindowTitle(f"跟{CHAR.get('name', '她')}說一件事")
-        self.setStyleSheet(DIALOG_CSS)
-        L = QVBoxLayout(self)
-        hint = QLabel("例如：三點半提醒我開會／20 分鐘後叫我／明天要考試／今天好累")
-        hint.setStyleSheet("color:#9a96c0"); hint.setWordWrap(True)
-        L.addWidget(hint)
+        self.setStyleSheet(DIALOG_CSS + "QListWidget{border:none} QLabel#title{color:#deb240;font-size:15px}")
+        frame = QVBoxLayout(self)
+        title = QLabel(f"跟{CHAR.get('name', '她')}聊天"); title.setObjectName("title")
+        frame.addWidget(title)
+        self.list = QListWidget(); self.list.setWordWrap(True)
+        self.list.setSelectionMode(QListWidget.NoSelection)
+        self.list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        frame.addWidget(self.list, 1)
         row = QHBoxLayout()
-        self.text = QLineEdit(); self.text.setMaxLength(40)
+        self.text = QLineEdit(); self.text.setMaxLength(60)
+        self.text.setPlaceholderText("說點什麼…（例如：三點半提醒我開會）")
         self.text.returnPressed.connect(self.send)
-        b = QPushButton("說"); b.clicked.connect(self.send)
+        b = QPushButton("送出"); b.clicked.connect(self.send)
         row.addWidget(self.text, 1); row.addWidget(b)
-        L.addLayout(row)
-        self.setFixedWidth(380)
+        frame.addLayout(row)
+        self.resize(340, 300)
 
-    def showEvent(self, e):
-        self.text.clear(); self.text.setFocus(); super().showEvent(e)
+    def add(self, who, text):
+        from PySide6.QtWidgets import QListWidgetItem
+        it = QListWidgetItem(f"{who}：{text}")
+        if who == "你":
+            it.setForeground(QColor("#9a96c0"))
+        self.list.addItem(it)
+        self.list.scrollToBottom()
+
+    def open_near(self, pt):
+        self.list.clear()
+        for who, text in self.pet.chat_log[-30:]:
+            self.add(who, text)
+        if not self.pet.chat_log:
+            self.add(CHAR.get("name", "她"), "……要說什麼？")
+        g = (QApplication.screenAt(pt) or QApplication.primaryScreen()).availableGeometry()
+        x = max(g.left(), min(g.right() - self.width(), pt.x() - self.width() // 2))
+        y = max(g.top(), pt.y() - self.height() - 10)
+        self.move(x, y)
+        self.show(); self.activateWindow(); self.text.setFocus()
 
     def send(self):
         t = self.text.text().strip()
         if t:
-            self.hide()
-            self.pet.on_tell(t)
+            self.text.clear()
+            self.pet.on_chat(t)
 
 
 # ===== 查看記憶 =====
@@ -656,7 +676,7 @@ class MemoryDialog(QWidget):
         self.setWindowTitle("她記得的事")
         self.setStyleSheet(DIALOG_CSS)
         L = QVBoxLayout(self)
-        hint = QLabel("只存在這台電腦。「跟她說一件事」的內容會整理成一句記下來，最多 7 天；"
+        hint = QLabel("只存在這台電腦。聊天時提到的近況（考試、出門…）會整理成一句記下來，最多 7 天；聊天內容本身不存檔，"
                       "另外會記每天開始和最後用電腦的時間、摸頭和送禮次數（不記你在做什麼）。")
         hint.setStyleSheet("color:#9a96c0"); hint.setWordWrap(True)
         L.addWidget(hint)
@@ -718,6 +738,7 @@ class Pet(QWidget):
         use = bool(persona.get("description")) and not persona["description"].startswith("（")
         self.brain = BRAIN = Brain(CONF_DIR, CHAR, self.stats.settings, CHAR_ID) if use else None
         self.started_at, self.last_refill = time.time(), 0.0
+        self.chat_log = []                             # 聊天框的內容（只在記憶體，關掉程式就清空）
         self.apply_on_top(self.stats.settings["on_top"], init=True)
 
         g = self.screen_geo()
@@ -911,12 +932,13 @@ class Pet(QWidget):
                 self.play("idle", 1)
             return
         m = minute_of_day()
-        pool = {"idle": 3, "walk": 3, "run": 2, "read": 2, "peek": 1}
-        pool.update({n: e.get("pool", 0) for n, e in EXTRA.items()})
+        # 移動類（走、跑、爬牆、會移動的專屬動作）權重壓低，多半待在原地
+        pool = {"idle": 4, "walk": 1, "run": 0.4, "read": 2, "peek": 1}
+        pool.update({n: e.get("pool", 0) * (0.4 if e.get("move") else 1) for n, e in EXTRA.items()})
         if is_pre_sleep(m):
             pool["snore"] = 2
         if s.energy < 25:                        # 累了：多休息，少跑步
-            pool = {"idle": 2, "read": 3, "snore": 3, "desk_sleep_r": 2, "walk": 1}
+            pool = {"idle": 2, "read": 3, "snore": 3, "desk_sleep_r": 2, "walk": 0.5}
         elif s.energy < 50:
             pool.pop("run", None)
             for n, e in EXTRA.items():
@@ -924,7 +946,7 @@ class Pet(QWidget):
                     pool.pop(n, None)
         st = s.settings
         if st.get("climb", True) and s.energy >= 40 and self.has("climb") and self.has("hang"):
-            pool["climb"] = 1
+            pool["climb"] = 0.4
         px_pin = self.pin_x()
         if px_pin is not None and abs(self.cx - px_pin) > 3 * self.scale:   # 固定位置：被拖走了就走回去
             self.play("walk", 0, 9 * self.scale, target=px_pin)
@@ -1088,8 +1110,11 @@ class Pet(QWidget):
         if e.button() == Qt.LeftButton:            # 先記下來：放開時沒移動就開選單，有移動就是拎起來
             self.press_pos = e.globalPosition().toPoint()
             self.drag_off = QPoint(int(self.cx), int(self.bottom)) - self.press_pos
-        elif e.button() == Qt.RightButton:
-            self.menu.popup(e.globalPosition().toPoint())
+        elif e.button() == Qt.RightButton:            # 右鍵：聊天框（沒有小模型的角色就開選單）
+            if self.brain is not None:
+                self.open_chat(e.globalPosition().toPoint())
+            else:
+                self.menu.popup(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e):
         if self.press_pos is None:
@@ -1342,10 +1367,10 @@ class Pet(QWidget):
             menu.addAction("取消滑鼠穿透", lambda _=False: self.set_passthrough(False))
             menu.addSeparator()
         sleeping = self.mode == "sleep"
-        im = menu.addMenu("互動")
-        im.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
+        menu.addAction("摸頭" + ("（會吵醒她）" if sleeping else ""), self.do_pat)
         if self.brain is not None:
-            menu.addAction("跟她說一件事…", self.tell)
+            menu.addAction("聊天（右鍵）", lambda _=False: self.open_chat(
+                self.mapToGlobal(self.sprite_rect.center())))
         gm = menu.addMenu("送禮")
         info = gm.addAction(f"剩 {self.stats.gift_stock} 個" if self.stats.gift_stock else
                             f"禮物送完了，{fmt_hours(self.stats.gift_eta() / TIME_SCALE)} 後補一個")
@@ -1690,18 +1715,37 @@ class Pet(QWidget):
             return True
         return False
 
-    def tell(self):
+    def open_chat(self, pt):
         if self.brain is None:
             return
         if not self.brain.ready():
-            self.setup_llm(then=self.tell); return
-        if not hasattr(self, "tell_dialog"):
-            self.tell_dialog = TellDialog(self)
-        self.tell_dialog.show(); self.tell_dialog.raise_(); self.tell_dialog.activateWindow()
+            self.setup_llm(then=lambda: self.open_chat(pt)); return
+        if not hasattr(self, "chat_dialog"):
+            self.chat_dialog = ChatDialog(self)
+        top = self.mapToGlobal(self.sprite_rect.topLeft())
+        self.chat_dialog.open_near(QPoint(int(self.cx), top.y()))
 
-    def on_tell(self, text):
-        """先用規則找時間（找到就是提醒），找不到就當成近況，交給模型回一句並記下來。"""
+    def chat_add(self, who, text):
+        self.chat_log.append((who, text))
+        del self.chat_log[:-40]
+        d = getattr(self, "chat_dialog", None)
+        if d is not None and d.isVisible():
+            d.add(who, text)
+
+    def chat_history(self):
+        """最近 6 句給模型當上下文（30 分鐘沒聊就重新開始）。"""
+        if time.time() - getattr(self, "chat_t", 0) > 30 * 60:
+            self.chat_log.clear()
+        name = CHAR.get("name", "她")
+        return [("assistant" if w == name else "user", t) for w, t in self.chat_log
+                if w in ("你", name) and t != "……"][-6:]
+
+    def on_chat(self, text):
+        """先用規則找時間（找到就是提醒），其他交給模型聊天；值得記的近況會記下來。"""
         b, aff = self.brain, self.stats.affection
+        history = self.chat_history()
+        self.chat_t = time.time()
+        self.chat_add("你", text)
         self.input_happened()
         if self.mode == "sleep":
             self.react(self.wake_prefix())
@@ -1720,15 +1764,17 @@ class Pet(QWidget):
             b.submit(lambda: b.job_reminder(when, task, aff), lambda line: self.reply(line, record))
         else:
             self.say("……", hold_ms=60000)
-            fallback = random.choice(b.persona.get("fallback") or ["嗯，我記住了。"])
-            if self.stats.settings.get("llm_memory", True):
-                job = lambda: b.job_note(text, aff)
-            else:
-                job = lambda: b.clean(b.complete(b.system_prompt(aff), f"使用者說：「{text}」。用一句話反應。", 60))
-            b.submit(job, lambda line: self.reply(line or fallback))
+            fallback = random.choice(b.persona.get("fallback") or ["嗯。"])
+            remember = bool(self.stats.settings.get("llm_memory", True))
+            b.submit(lambda: b.job_chat(text, history, aff, remember), lambda line: self.reply(line or fallback))
 
     def reply(self, line, then=None):
         """模型的回覆（失敗時 line 是 None）。then：接著再說一句（例如提醒的時間）。"""
+        name = CHAR.get("name", "她")
+        if line:
+            self.chat_add(name, line)
+        if then:
+            self.chat_add(name, then)
         if line:
             self.bubble.hide()
             self.say(line)
@@ -1749,13 +1795,6 @@ class Pet(QWidget):
         a.triggered.connect(lambda on: self.set_llm(on))
         a.setEnabled(not dl)
         lm.addAction(a)
-        mm = lm.addMenu("模型")
-        grp = QActionGroup(mm)
-        for key, info in MODELS.items():
-            a = QAction(info["label"], mm, checkable=True, checked=st.get("llm_model", "standard") == key)
-            a.triggered.connect(lambda _=False, k=key: self.set_llm_model(k))
-            a.setEnabled(not dl)
-            grp.addAction(a); mm.addAction(a)
         fm = lm.addMenu("台詞換新")
         fgrp = QActionGroup(fm)
         for label, v in (("關閉（只用原本的台詞）", 0.0), ("偶爾", 0.15), ("有時候", 0.25), ("常常", 0.5)):
@@ -1779,13 +1818,6 @@ class Pet(QWidget):
         self.stats.save()
         if not on:
             b.stop()
-
-    def set_llm_model(self, key):
-        self.stats.settings["llm_model"] = key
-        self.brain.stop()
-        self.brain.mem["fresh"].clear()
-        if self.brain.enabled and not self.brain.has_model():
-            self.setup_llm()
 
     def setup_llm(self, then=None):
         """第一次啟用：說明、徵求同意，再下載 llama-server 和模型。"""
